@@ -1,0 +1,69 @@
+{
+  "name": "raydium-sdk",
+  "version": "1.3.2",
+  "description": "A simple SDK for interacting with Raydium",
+  "type": "module",
+  "module": "./dist/esm/index.mjs",
+  "main": "./dist/cjs/index.cjs",
+  "browser": "./dist/browser/index.js",
+  "types": "./dist/esm/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/esm/index.d.ts",
+      "import": "./dist/esm/index.mjs",
+      "require": "./dist/cjs/index.cjs",
+      "browser": "./dist/browser/index.js",
+      "default": "./dist/esm/index.mjs"
+    }
+  },
+  "engines": {
+    "node": ">=v20.9.0"
+  },
+  "scripts": {
+    "prepare": "npm run build",
+    "test:builds": "npm run build && node --test ./__tests__/**/*.test.*js",
+    "build": "rimraf dist/ && rollup -c --bundleConfigAsCjs",
+    "example": "tsx example/basic/index.ts",
+    "test": "node --max-old-space-size=8192 --test ./__tests__/raydium.test.mjs",
+    "test:esm": "node --max-old-space-size=8192 --test ./ __tests__/esm.test.mjs"
+  },
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jclagache/raydium-sdk"
+  },
+  "keywords": [
+    "raydium",
+    "sdk",
+    "solana"
+  ],
+  "author": "jclagache",
+  "license": "MIT",
+  "devDependencies": {
+    "@rollup/plugin-commonjs": "^28.0.3",
+    "@rollup/plugin-json": "^6.1.0",
+    "@rollup/plugin-node-resolve": "^16.0.1",
+    "@rollup/plugin-typescript": "^12.1.2",
+    "@tsconfig/node20": "^20.1.5",
+    "@types/node": "^20.17.30",
+    "dotenv": "^16.4.7",
+    "js-sha256": "^0.11.0",
+    "puppeteer": "^24.5.0",
+    "rimraf": "^6.0.1",
+    "rollup": "^4.38.0",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2",
+    "node": "^22.6.0"
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "^0.31.0",
+    "@coral-xyz/borsh": "^0.31.0",
+    "@raydium-io/raydium-sdk-v2": "^0.1.128-alpha",
+    "@solana/spl-token": "0.4.13",
+    "@solana/web3.js": "^1.98.0",
+    "bn.js": "^5.2.1",
+    "jsonfile": "^6.1.0"
+  }
+}
