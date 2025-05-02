@@ -35,7 +35,7 @@
     "build-all": "yarn build-dist && yarn build-lib",
     "build": "yarn build-lib",
     "push": "yarn build && yarn publish",
-    "prepare": "husky install || true",
+    "prepare": "npm run build",
     "dev": "ts-node -r tsconfig-paths/register",
     "watch": "rm -rf lib && tsup src --watch --format cjs,esm --dts --sourcemap --no-splitting --minify -d lib"
   },
