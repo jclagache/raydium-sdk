@@ -1,19 +1,15 @@
 import { Provider } from "@coral-xyz/anchor";
-import { BasicPoolInfo, JupTokenType, Raydium, TxVersion } from "@raydium-io/raydium-sdk-v2";
-import { Commitment, Finality, Keypair, PublicKey, Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
+import { BasicPoolInfo, JupTokenType, Raydium, TxVersion, Token, ApiV3Token, toApiV3Token } from "@raydium-io/raydium-sdk-v2";
+import { Commitment, Finality, Keypair, PublicKey } from "@solana/web3.js";
 import { PriorityFee, TransactionResult } from "./types.js";
-import { DEFAULT_COMMITMENT, DEFAULT_FINALITY} from "./util.js";
+import { DEFAULT_COMMITMENT, DEFAULT_FINALITY, getProjectPath } from "./util.js";
 import { TOKEN_WSOL } from "@raydium-io/raydium-sdk-v2";
 import { TokenAmount, toToken } from "@raydium-io/raydium-sdk-v2";
 import { getAssociatedTokenAddress, getAccount } from "@solana/spl-token";
 import { Connection } from "@solana/web3.js";
-import { join } from "path";
+import path from "path";
 import fs from "fs";
 import jsonfile from "jsonfile";
-import { fileURLToPath } from 'url';
-import { dirname } from 'path';
-
-
 
 export class RaydiumSDK {
   public program!: Raydium;
@@ -23,7 +19,6 @@ export class RaydiumSDK {
       throw new Error("Provider wallet is undefined");
     }
     this.cachePools = cachePools ?? null;
-    // Initialize Raydium asynchronously
     Raydium.load({
       connection: provider.connection,
       owner: provider.wallet.publicKey,
@@ -47,7 +42,6 @@ export class RaydiumSDK {
     slippageBasisPoints: bigint,
     priorityFees?: PriorityFee
   ): Promise<never> {
-    // Always throw an error to indicate this method is not implemented
     throw new Error("createAndBuyToken is not implemented.");
   }
 
@@ -58,107 +52,144 @@ export class RaydiumSDK {
     buyer: Keypair,
     mint: PublicKey,
     buyAmountSol: bigint,
-    slippageBasisPoints: bigint = 500n,
+    slippageBasisPoints = BigInt(500),
     priorityFees?: PriorityFee,
     commitment: Commitment = DEFAULT_COMMITMENT,
     finality: Finality = DEFAULT_FINALITY
   ): Promise<TransactionResult> {
-    // 1. Get WSOL mint address (Raydium uses WSOL for SOL swaps)
     const wsolMint = new PublicKey(TOKEN_WSOL.address);
+    const inputMint = wsolMint;
+    const outputMint = mint;
+    
+    try {
+      await this.program.fetchChainTime();
+      
+      const inputMintStr = inputMint.toBase58();
+      const outputMintStr = outputMint.toBase58();
+      
+      const poolCache = this.cachePools ?? FilePoolCache.getInstance();
+      let poolData = poolCache.pools;
+      
+      if (!poolData) {
+        poolData = await this.program.tradeV2.fetchRoutePoolBasicInfo();
+        poolCache.setPools(poolData);
+      }
+      
+      const routes = this.program.tradeV2.getAllRoute({
+        inputMint,
+        outputMint,
+        ...poolData
+      });
+      
+      if (Object.keys(routes.directPath).length === 0 && Object.keys(routes.routePathDict).length === 0) {
+        throw new Error(`No swap route found between ${inputMintStr} and ${outputMintStr}`);
+      }
+      
+      const { 
+        routePathDict, 
+        mintInfos, 
+        ammPoolsRpcInfo, 
+        ammSimulateCache,
+        clmmPoolsRpcInfo, 
+        computePoolTickData,
+        computeCpmmData
+      } = await this.program.tradeV2.fetchSwapRoutesData({
+        routes,
+        inputMint,
+        outputMint
+      });
+      
+      if (!mintInfos[inputMintStr] || !mintInfos[outputMintStr]) {
+        throw new Error(`Missing mint info for ${!mintInfos[inputMintStr] ? inputMintStr : outputMintStr}`);
+      }
+      
+      const inputAmount = buyAmountSol.toString();
+      
+      const inputTokenAmount = new TokenAmount(
+        new Token({
+          mint: inputMintStr,
+          decimals: mintInfos[inputMintStr].decimals,
+          isToken2022: mintInfos[inputMintStr].programId.equals(new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb')),
+        }),
+        inputAmount
+      );
+      
+      const slippage = Number(slippageBasisPoints) / 10000;
+      const epochInfo = await this.program.connection.getEpochInfo();
+      
+      const outputTokenApi = toApiV3Token({
+        address: outputMintStr,
+        programId: mintInfos[outputMintStr].programId.toBase58(),
+        decimals: mintInfos[outputMintStr].decimals,
+        name: outputMintStr.slice(0, 5),
+        symbol: outputMintStr.slice(0, 5),
+        logoURI: '',
+        chainId: 0
+      });
 
-    // 2. Load token info for output mint
-    const outputTokenInfo = await this.program.token.getTokenInfo(mint);
-
-    // 3. Fetch all available swap routes
-    // strongly recommend cache all pool data, it will reduce lots of data fetching time
-    // code below is a simple way to cache it, you can implement it with any other ways
-    const poolCache = this.cachePools ?? FilePoolCache.getInstance();
-    let poolData = poolCache.pools;
-    if (!poolData) {
-      console.log(
-        '**Please ensure you are using "paid" rpc node or you might encounter fetch data error due to pretty large pool data**'
-      )
-      poolData = await this.program.tradeV2.fetchRoutePoolBasicInfo()
-      poolCache.setPools(poolData);
+      const swapRoutes = this.program.tradeV2.getAllRouteComputeAmountOut({
+        inputTokenAmount,
+        directPath: routes.directPath.map(
+          (p) => ammSimulateCache[p.id.toBase58()] || 
+                computePoolTickData[p.id.toBase58()] || 
+                computeCpmmData[p.id.toBase58()]
+        ),
+        routePathDict,
+        simulateCache: ammSimulateCache,
+        tickCache: computePoolTickData,
+        outputToken: outputTokenApi,
+        mintInfos,
+        slippage,
+        chainTime: Math.floor(this.program.chainTimeData?.chainTime ?? Date.now() / 1000),
+        epochInfo
+      });
+      
+      if (!swapRoutes.length) {
+        if (buyAmountSol < BigInt(1e8)) {
+          console.error(`[BUY] No swap routes found - Try with a larger amount (at least 0.1 SOL)`);
+          throw new Error("No swap route found - Amount too small");
+        }
+        throw new Error("No swap route found");
+      }
+      
+      const targetRoute = swapRoutes[0];
+      
+      const poolKeys = await this.program.tradeV2.computePoolToPoolKeys({
+        pools: targetRoute.poolInfoList,
+        ammRpcData: ammPoolsRpcInfo,
+        clmmRpcData: clmmPoolsRpcInfo
+      });
+      
+      const swapTxData = await this.program.tradeV2.swap({
+        txVersion: TxVersion.V0,
+        swapInfo: targetRoute,
+        swapPoolKeys: poolKeys,
+        ownerInfo: {
+          associatedOnly: true,
+          checkCreateATAOwner: true,
+        },
+        routeProgram: new PublicKey(poolKeys[0].id),
+        feePayer: buyer.publicKey,
+        computeBudgetConfig: {
+          units: 600000,
+          microLamports: 465915,
+        }
+      });
+      
+      const tx = swapTxData.transactions[0];
+      const signature = await this.program.connection.sendRawTransaction(
+        tx.serialize(),
+        { skipPreflight: false, preflightCommitment: commitment }
+      );
+      
+      return {
+        success: true,
+        signature
+      };
+    } catch (error) {
+      console.error(`[BUY] Error during swap:`, error);
+      throw error;
     }
-    const allRoutes = this.program.tradeV2.getAllRoute({
-      inputMint: wsolMint,
-      outputMint: mint,
-      clmmPools: poolData.clmmPools,
-      ammPools: poolData.ammPools,
-      cpmmPools: poolData.cpmmPools,
-    });
-
-    // 4. Fetch route simulation data
-    const swapRoutesData = await this.program.tradeV2.fetchSwapRoutesData({
-      routes: allRoutes,
-      inputMint: wsolMint,
-      outputMint: mint,
-    });
-
-    // 5. Prepare input amount as TokenAmount
-    const inputTokenInfo = await this.program.token.getTokenInfo(wsolMint);
-    const inputTokenAmount = new TokenAmount(
-      toToken(inputTokenInfo),
-      buyAmountSol.toString()
-    );
-
-    // 6. Compute best route and minAmountOut with slippage
-    const epochInfo = await this.program.connection.getEpochInfo();
-    const chainTime = Date.now(); // or fetch from chain if needed
-    const slippage = Number(slippageBasisPoints) / 10000; // e.g. 500 = 5%
-    const computeAmountOuts = this.program.tradeV2.getAllRouteComputeAmountOut({
-      inputTokenAmount,
-      outputToken: outputTokenInfo,
-      directPath: swapRoutesData.routePathDict[outputTokenInfo.address]?.in ?? [],
-      routePathDict: swapRoutesData.routePathDict,
-      simulateCache: swapRoutesData.ammSimulateCache,
-      tickCache: swapRoutesData.computePoolTickData,
-      mintInfos: swapRoutesData.mintInfos,
-      slippage,
-      chainTime,
-      epochInfo,
-    });
-
-    if (!computeAmountOuts.length) throw new Error("No swap route found");
-
-    // 7. Select the best route (highest minAmountOut)
-    const bestRoute = computeAmountOuts.reduce((a, b) =>
-      a.minAmountOut.amount.gt(b.minAmountOut.amount) ? a : b
-    );
-
-    // 8. Get pool keys for the route
-    const poolKeys = await this.program.tradeV2.computePoolToPoolKeys({
-      pools: bestRoute.poolInfoList,
-      clmmRpcData: swapRoutesData.clmmPoolsRpcInfo,
-      ammRpcData: swapRoutesData.ammPoolsRpcInfo,
-    });
-
-    // 9. Build the swap transaction
-    const swapTxData = await this.program.tradeV2.swap({
-      txVersion: TxVersion.V0, // 0 = legacy, 1 = v0
-      swapInfo: bestRoute,
-      swapPoolKeys: poolKeys,
-      ownerInfo: {
-        associatedOnly: true,
-        checkCreateATAOwner: true,
-      },
-      routeProgram: new PublicKey(poolKeys[0].id),
-      feePayer: buyer.publicKey,
-    });
-
-    // 10. Sign and send the transaction
-    const tx = swapTxData.transactions[0];
-    const signature = await this.program.connection.sendRawTransaction(
-      tx.serialize(),
-      { skipPreflight: false, preflightCommitment: commitment }
-    );
-
-    // 11. Return the transaction result
-    return {
-      success: true,
-      signature,
-    };
   }
 
   /**
@@ -168,107 +199,140 @@ export class RaydiumSDK {
     seller: Keypair,
     mint: PublicKey,
     sellTokenAmount: bigint,
-    slippageBasisPoints: bigint = 500n,
+    slippageBasisPoints = BigInt(500),
     priorityFees?: PriorityFee,
     commitment: Commitment = DEFAULT_COMMITMENT,
     finality: Finality = DEFAULT_FINALITY
   ): Promise<TransactionResult> {
-    // 1. Get WSOL mint address (Raydium uses WSOL for SOL swaps)
     const wsolMint = new PublicKey(TOKEN_WSOL.address);
+    const inputMint = mint;
+    const outputMint = wsolMint;
+    
+    try {
+      await this.program.fetchChainTime();
+      
+      const inputMintStr = inputMint.toBase58();
+      const outputMintStr = outputMint.toBase58();
+      
+      const poolCache = this.cachePools ?? FilePoolCache.getInstance();
+      let poolData = poolCache.pools;
+      
+      if (!poolData) {
+        poolData = await this.program.tradeV2.fetchRoutePoolBasicInfo();
+        poolCache.setPools(poolData);
+      }
+      
+      const routes = this.program.tradeV2.getAllRoute({
+        inputMint,
+        outputMint,
+        ...poolData
+      });
+      
+      if (Object.keys(routes.directPath).length === 0 && Object.keys(routes.routePathDict).length === 0) {
+        throw new Error(`No swap route found between ${inputMintStr} and ${outputMintStr}`);
+      }
+      
+      const { 
+        routePathDict, 
+        mintInfos, 
+        ammPoolsRpcInfo, 
+        ammSimulateCache,
+        clmmPoolsRpcInfo, 
+        computePoolTickData,
+        computeCpmmData
+      } = await this.program.tradeV2.fetchSwapRoutesData({
+        routes,
+        inputMint,
+        outputMint
+      });
+      
+      if (!mintInfos[inputMintStr] || !mintInfos[outputMintStr]) {
+        throw new Error(`Missing mint info for ${!mintInfos[inputMintStr] ? inputMintStr : outputMintStr}`);
+      }
+      
+      const inputAmount = sellTokenAmount.toString();
+      
+      const inputTokenAmount = new TokenAmount(
+        new Token({
+          mint: inputMintStr,
+          decimals: mintInfos[inputMintStr].decimals,
+          isToken2022: mintInfos[inputMintStr].programId.equals(new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb')),
+        }),
+        inputAmount
+      );
+      
+      const slippage = Number(slippageBasisPoints) / 10000;
+      const epochInfo = await this.program.connection.getEpochInfo();
+      
+      const outputTokenApi = toApiV3Token({
+        address: outputMintStr, 
+        programId: mintInfos[outputMintStr].programId.toBase58(),
+        decimals: mintInfos[outputMintStr].decimals,
+        name: outputMintStr.slice(0, 5),
+        symbol: outputMintStr.slice(0, 5),
+        logoURI: '',
+        chainId: 0
+      });
 
-    // 2. Load token info for input mint (SPL token)
-    const inputTokenInfo = await this.program.token.getTokenInfo(mint);
-
-    // 3. Fetch all available swap routes
-    // strongly recommend cache all pool data, it will reduce lots of data fetching time
-    // code below is a simple way to cache it, you can implement it with any other ways
-    const poolCache = this.cachePools ?? FilePoolCache.getInstance();
-    let poolData = poolCache.pools;
-    if (!poolData) {
-      console.log(
-        '**Please ensure you are using "paid" rpc node or you might encounter fetch data error due to pretty large pool data**'
-      )
-      poolData = await this.program.tradeV2.fetchRoutePoolBasicInfo()
-      poolCache.setPools(poolData);
+      const swapRoutes = this.program.tradeV2.getAllRouteComputeAmountOut({
+        inputTokenAmount,
+        directPath: routes.directPath.map(
+          (p) => ammSimulateCache[p.id.toBase58()] || 
+                computePoolTickData[p.id.toBase58()] || 
+                computeCpmmData[p.id.toBase58()]
+        ),
+        routePathDict,
+        simulateCache: ammSimulateCache,
+        tickCache: computePoolTickData,
+        outputToken: outputTokenApi,
+        mintInfos,
+        slippage,
+        chainTime: Math.floor(this.program.chainTimeData?.chainTime ?? Date.now() / 1000),
+        epochInfo
+      });
+      
+      if (!swapRoutes.length) {
+        throw new Error("No swap route found");
+      }
+      
+      const targetRoute = swapRoutes[0];
+      
+      const poolKeys = await this.program.tradeV2.computePoolToPoolKeys({
+        pools: targetRoute.poolInfoList,
+        ammRpcData: ammPoolsRpcInfo,
+        clmmRpcData: clmmPoolsRpcInfo
+      });
+      
+      const swapTxData = await this.program.tradeV2.swap({
+        txVersion: TxVersion.V0,
+        swapInfo: targetRoute,
+        swapPoolKeys: poolKeys,
+        ownerInfo: {
+          associatedOnly: true,
+          checkCreateATAOwner: true,
+        },
+        routeProgram: new PublicKey(poolKeys[0].id),
+        feePayer: seller.publicKey,
+        computeBudgetConfig: {
+          units: 600000,
+          microLamports: 465915,
+        }
+      });
+      
+      const tx = swapTxData.transactions[0];
+      const signature = await this.program.connection.sendRawTransaction(
+        tx.serialize(),
+        { skipPreflight: false, preflightCommitment: commitment }
+      );
+      
+      return {
+        success: true,
+        signature
+      };
+    } catch (error) {
+      console.error(`[SELL] Error during swap:`, error);
+      throw error;
     }
-    const allRoutes = this.program.tradeV2.getAllRoute({
-      inputMint: mint,
-      outputMint: wsolMint,
-      clmmPools: poolData.clmmPools,
-      ammPools: poolData.ammPools,
-      cpmmPools: poolData.cpmmPools,
-    });
-
-    // 4. Fetch route simulation data
-    const swapRoutesData = await this.program.tradeV2.fetchSwapRoutesData({
-      routes: allRoutes,
-      inputMint: mint,
-      outputMint: wsolMint,
-    });
-
-    // 5. Prepare input amount as TokenAmount
-    const inputTokenAmount = new TokenAmount(
-      toToken(inputTokenInfo),
-      sellTokenAmount.toString()
-    );
-
-    // 6. Compute best route and minAmountOut with slippage
-    const epochInfo = await this.program.connection.getEpochInfo();
-    const chainTime = Date.now(); // or fetch from chain if needed
-    const slippage = Number(slippageBasisPoints) / 10000; // e.g. 500 = 5%
-    const outputTokenInfo = await this.program.token.getTokenInfo(wsolMint);
-    const computeAmountOuts = this.program.tradeV2.getAllRouteComputeAmountOut({
-      inputTokenAmount,
-      outputToken: outputTokenInfo,
-      directPath: swapRoutesData.routePathDict[outputTokenInfo.address]?.in ?? [],
-      routePathDict: swapRoutesData.routePathDict,
-      simulateCache: swapRoutesData.ammSimulateCache,
-      tickCache: swapRoutesData.computePoolTickData,
-      mintInfos: swapRoutesData.mintInfos,
-      slippage,
-      chainTime,
-      epochInfo,
-    });
-
-    if (!computeAmountOuts.length) throw new Error("No swap route found");
-
-    // 7. Select the best route (highest minAmountOut)
-    const bestRoute = computeAmountOuts.reduce((a, b) =>
-      a.minAmountOut.amount.gt(b.minAmountOut.amount) ? a : b
-    );
-
-    // 8. Get pool keys for the route
-    const poolKeys = await this.program.tradeV2.computePoolToPoolKeys({
-      pools: bestRoute.poolInfoList,
-      clmmRpcData: swapRoutesData.clmmPoolsRpcInfo,
-      ammRpcData: swapRoutesData.ammPoolsRpcInfo,
-    });
-
-    // 9. Build the swap transaction
-    const swapTxData = await this.program.tradeV2.swap({
-      txVersion: TxVersion.V0 , // 0 = legacy, 1 = v0
-      swapInfo: bestRoute,
-      swapPoolKeys: poolKeys,
-      ownerInfo: {
-        associatedOnly: true,
-        checkCreateATAOwner: true,
-      },
-      routeProgram: new PublicKey(poolKeys[0].id),
-      feePayer: seller.publicKey,
-    });
-
-    // 10. Sign and send the transaction
-    const tx = swapTxData.transactions[0];
-    const signature = await this.program.connection.sendRawTransaction(
-      tx.serialize(),
-      { skipPreflight: false, preflightCommitment: commitment }
-    );
-
-    // 11. Return the transaction result
-    return {
-      success: true,
-      signature,
-    };
   }
 
   /**
@@ -279,12 +343,11 @@ export class RaydiumSDK {
     buyerSeller: Keypair,
     mint: PublicKey,
     buyAmountSol: bigint,
-    slippageBasisPoints: bigint = 500n,
+    slippageBasisPoints = BigInt(500),
     priorityFees?: PriorityFee,
     commitment: Commitment = DEFAULT_COMMITMENT,
     finality: Finality = DEFAULT_FINALITY
   ): Promise<TransactionResult> {
-    // 1. Buy the SPL token with SOL
     const buyResult = await this.buy(
       buyerSeller,
       mint,
@@ -295,7 +358,6 @@ export class RaydiumSDK {
       finality
     );
 
-    // 2. Fetch the actual SPL token balance after the buy
     const ata = await getAssociatedTokenAddress(
       mint,
       buyerSeller.publicKey
@@ -307,7 +369,6 @@ export class RaydiumSDK {
     );
     const amountToSell = BigInt(accountInfo.amount.toString());
 
-    // 3. Sell the SPL token back to SOL
     const sellResult = await this.sell(
       buyerSeller,
       mint,
@@ -318,10 +379,9 @@ export class RaydiumSDK {
       finality
     );
 
-    // 4. Return a combined result (only allowed TransactionResult fields)
     return {
       success: sellResult.success && buyResult.success,
-      signature: sellResult.signature, // or return both signatures if you update the type
+      signature: sellResult.signature,
     };
   }
 
@@ -333,27 +393,20 @@ export class RaydiumSDK {
    */
   static async isTradable(mint: PublicKey, connection: Connection, cachePools?: CachePools): Promise<boolean> {
     try {
-      // Get WSOL mint address (Raydium uses WSOL for SOL swaps)
       const wsolMint = new PublicKey(TOKEN_WSOL.address);
-      // Initialize Raydium instance
       const raydium = await Raydium.load({
         connection,
         cluster: "mainnet",
         jupTokenType: JupTokenType.ALL
       });
-      // Fetch all available swap routes
-      // strongly recommend cache all pool data, it will reduce lots of data fetching time
-      // code below is a simple way to cache it, you can implement it with any other ways
+      
       const poolCache = cachePools ?? FilePoolCache.getInstance();
       let poolData = poolCache.pools;
       if (!poolData) {
-        console.log(
-          '**Please ensure you are using "paid" rpc node or you might encounter fetch data error due to pretty large pool data**'
-        )
-        poolData = await raydium.tradeV2.fetchRoutePoolBasicInfo()
+        poolData = await raydium.tradeV2.fetchRoutePoolBasicInfo();
         poolCache.setPools(poolData);
       }
-      // Check routes in both directions (SOL -> Token and Token -> SOL)
+      
       const routesToToken = raydium.tradeV2.getAllRoute({
         inputMint: wsolMint,
         outputMint: mint,
@@ -368,7 +421,7 @@ export class RaydiumSDK {
         ammPools: poolData.ammPools,
         cpmmPools: poolData.cpmmPools,
       });
-      // Token is tradable if there are valid routes in either direction
+      
       const isTradable = (Object.keys(routesToToken.directPath).length > 0 || Object.keys(routesToToken.routePathDict).length > 0) &&
         (Object.keys(routesToSol.directPath).length > 0 || Object.keys(routesToSol.routePathDict).length > 0);
       return isTradable;
@@ -392,17 +445,13 @@ export interface CachePools {
   }) => void;
 }
 
-
-// Private implementation of CachePools interface
 class FilePoolCache implements CachePools {
   private static instance: FilePoolCache;
   private readonly filePath: string;
   private readonly cacheTime: number = 1000 * 60 * 60 * 24; // 24 hours
 
   private constructor() {
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = dirname(__filename);
-    this.filePath = join(__dirname, '../data/pool_data.json');
+    this.filePath = path.join(getProjectPath(), 'pool_data.json');
   }
 
   private isCacheValid(data: { time: number }): boolean {
@@ -422,7 +471,6 @@ class FilePoolCache implements CachePools {
     cpmmPools: BasicPoolInfo[];
   } | null {
     try {
-      console.log('reading cache pool data')
       const data = jsonfile.readFileSync(this.filePath) as {
         time: number
         ammPools: BasicPoolInfo[]
@@ -430,8 +478,7 @@ class FilePoolCache implements CachePools {
         cpmmPools: BasicPoolInfo[]
       }
       if (!this.isCacheValid(data)) {
-        console.log('cache data expired')
-        return null
+        return null;
       }
       return {
         ammPools: data.ammPools.map((p) => ({
@@ -452,10 +499,9 @@ class FilePoolCache implements CachePools {
           mintA: new PublicKey(p.mintA),
           mintB: new PublicKey(p.mintB),
         })),
-      }
+      };
     } catch {
-      console.log('cannot read cache pool data')
-      return null
+      return null;
     }
   }
 
@@ -464,16 +510,6 @@ class FilePoolCache implements CachePools {
     clmmPools: BasicPoolInfo[];
     cpmmPools: BasicPoolInfo[];
   }): void {
-    console.log('caching all pool basic info..')
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = dirname(__filename);
-    fs.mkdir(join(__dirname, '../data'), (err) => {
-      if (err) {
-        return console.error(err)
-      }
-    })
-  
-    // Process pools in chunks to reduce memory usage
     const processChunk = (pools: BasicPoolInfo[]) => {
       return pools.map((p) => ({
         id: p.id.toBase58(),
@@ -490,13 +526,16 @@ class FilePoolCache implements CachePools {
       cpmmPools: processChunk(pools.cpmmPools),
     };
   
-    jsonfile
-      .writeFile(this.filePath, processedData)
-      .then(() => {
-        console.log('cache pool data success')
-      })
-      .catch((e) => {
-        console.log('cache pool data failed', e)
-      })
+    try {
+      const dirPath = path.join(getProjectPath(), 'data');
+      if (!fs.existsSync(dirPath)) {
+        fs.mkdirSync(dirPath, { recursive: true });
+      }
+      
+      jsonfile.writeFileSync(this.filePath, processedData);
+    } catch (e) {
+      console.error('Cache pool data failed', e);
+      // Ignore write errors
+    }
   }
 }

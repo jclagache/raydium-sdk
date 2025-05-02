@@ -12,8 +12,7 @@ import {
   VersionedTransactionResponse,
 } from "@solana/web3.js";
 import { PriorityFee, TransactionResult } from "./types.js";
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
+import path from 'path';
 
 import { BasicPoolInfo } from '@raydium-io/raydium-sdk-v2'
 import jsonfile from 'jsonfile'
@@ -22,9 +21,11 @@ import fs from 'fs'
 export const DEFAULT_COMMITMENT: Commitment = "finalized";
 export const DEFAULT_FINALITY: Finality = "finalized";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const filePath = join(__dirname, '../data/pool_data.json');
+export const getProjectPath = () => {
+  return process.cwd();
+};
+
+const filePath = path.join(getProjectPath(), '../data/pool_data.json');
 
 export const calculateWithSlippageBuy = (
   amount: bigint,
@@ -49,7 +50,7 @@ export async function sendTx(
   commitment: Commitment = DEFAULT_COMMITMENT,
   finality: Finality = DEFAULT_FINALITY
 ): Promise<TransactionResult> {
-  let newTx = new Transaction();
+  const newTx = new Transaction();
 
   if (priorityFees) {
     const modifyComputeUnits = ComputeBudgetProgram.setComputeUnitLimit({
@@ -65,7 +66,7 @@ export async function sendTx(
 
   newTx.add(tx);
 
-  let versionedTx = await buildVersionedTx(connection, payer, newTx, commitment);
+  const versionedTx = await buildVersionedTx(connection, payer, newTx, commitment);
   versionedTx.sign(signers);
 
   try {
@@ -74,7 +75,7 @@ export async function sendTx(
     });
     console.log("sig:", `https://solscan.io/tx/${sig}`);
 
-    let txResult = await getTxDetails(connection, sig, commitment, finality);
+    const txResult = await getTxDetails(connection, sig, commitment, finality);
     if (!txResult) {
       return {
         success: false,
@@ -88,7 +89,7 @@ export async function sendTx(
     };
   } catch (e) {
     if (e instanceof SendTransactionError) {
-      let ste = e as SendTransactionError;
+      const ste = e as SendTransactionError;
       console.log("SendTransactionError" + await ste.getLogs(connection));
     } else {
       console.error(e);
@@ -109,7 +110,7 @@ export const buildVersionedTx = async (
   const blockHash = (await connection.getLatestBlockhash(commitment))
     .blockhash;
 
-  let messageV0 = new TransactionMessage({
+  const messageV0 = new TransactionMessage({
     payerKey: payer,
     recentBlockhash: blockHash,
     instructions: tx.instructions,
