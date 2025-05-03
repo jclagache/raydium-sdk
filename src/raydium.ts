@@ -223,7 +223,7 @@ export class RaydiumSDK {
         clmmRpcData: routesData.clmmPoolsRpcInfo
       });
 
-      const swapTxData = await this.program.tradeV2.swap({
+      const { execute, transactions } = await this.program.tradeV2.swap({
         txVersion: TxVersion.V0,
         swapInfo: targetRoute,
         swapPoolKeys: poolKeys,
@@ -238,16 +238,11 @@ export class RaydiumSDK {
           microLamports: 465915,
         }
       });
-
-      const tx = swapTxData.transactions[0];
-      const signature = await this.program.connection.sendRawTransaction(
-        tx.serialize(),
-        { skipPreflight: false, preflightCommitment: commitment }
-      );
-
+      const { txIds } = await execute({ sequentially: true })
+      txIds.forEach((txId) => console.log(`https://explorer.solana.com/tx/${txId}`))
       return {
         success: true,
-        signature
+        signature: txIds[0]
       };
     } catch (error) {
       console.error(`[BUY] Error during buy:`, error);
@@ -408,7 +403,7 @@ export class RaydiumSDK {
         clmmRpcData: routesData.clmmPoolsRpcInfo
       });
 
-      const swapTxData = await this.program.tradeV2.swap({
+      const { execute, transactions } = await this.program.tradeV2.swap({
         txVersion: TxVersion.V0,
         swapInfo: targetRoute,
         swapPoolKeys: poolKeys,
@@ -424,15 +419,11 @@ export class RaydiumSDK {
         }
       });
 
-      const tx = swapTxData.transactions[0];
-      const signature = await this.program.connection.sendRawTransaction(
-        tx.serialize(),
-        { skipPreflight: false, preflightCommitment: commitment }
-      );
-
+      const { txIds } = await execute({ sequentially: true })
+      txIds.forEach((txId) => console.log(`https://explorer.solana.com/tx/${txId}`))
       return {
         success: true,
-        signature
+        signature: txIds[0]
       };
     } catch (error) {
       console.error(`[SELL] Error during sell:`, error);
