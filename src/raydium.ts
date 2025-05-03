@@ -252,8 +252,22 @@ export class RaydiumSDK {
     } catch (error) {
       console.error(`[BUY] Error during buy:`, error);
       if (error instanceof SendTransactionError) {
-        const logs = await error.getLogs(this.program.connection);
-        console.error(`[BUY] Transaction logs:`, logs);
+        try {
+          // Try to get logs but handle potential errors as these properties might be private
+          const logs = await error.getLogs(this.program.connection).catch(() => null);
+          console.error(`[BUY] Transaction error details:`, error.message);
+          
+          if (logs) {
+            console.error(`[BUY] Transaction logs:`, logs);
+          } else {
+            console.error(`[BUY] No transaction logs available. Simulation may have failed.`);
+          }
+          
+          // Print the full error as JSON for debugging
+          console.error(`[BUY] Full error:`, JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+        } catch (logError) {
+          console.error(`[BUY] Failed to get transaction logs:`, logError);
+        }
       }
       throw error;
     }
@@ -423,8 +437,22 @@ export class RaydiumSDK {
     } catch (error) {
       console.error(`[SELL] Error during sell:`, error);
       if (error instanceof SendTransactionError) {
-        const logs = await error.getLogs(this.program.connection);
-        console.error(`[SELL] Transaction logs:`, logs);
+        try {
+          // Try to get logs but handle potential errors as these properties might be private
+          const logs = await error.getLogs(this.program.connection).catch(() => null);
+          console.error(`[SELL] Transaction error details:`, error.message);
+          
+          if (logs) {
+            console.error(`[SELL] Transaction logs:`, logs);
+          } else {
+            console.error(`[SELL] No transaction logs available. Simulation may have failed.`);
+          }
+          
+          // Print the full error as JSON for debugging
+          console.error(`[SELL] Full error:`, JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+        } catch (logError) {
+          console.error(`[SELL] Failed to get transaction logs:`, logError);
+        }
       }
       throw error;
     }
@@ -459,8 +487,22 @@ export class RaydiumSDK {
     } catch (error) {
       console.error(`[BUY AND SELL] Error during buy:`, error);
       if (error instanceof SendTransactionError) {
-        const logs = await error.getLogs(this.program.connection);
-        console.error(`[BUY AND SELL] Transaction logs:`, logs);
+        try {
+          // Try to get logs but handle potential errors as these properties might be private
+          const logs = await error.getLogs(this.program.connection).catch(() => null);
+          console.error(`[BUY AND SELL] Transaction error details:`, error.message);
+          
+          if (logs) {
+            console.error(`[BUY AND SELL] Transaction logs:`, logs);
+          } else {
+            console.error(`[BUY AND SELL] No transaction logs available. Simulation may have failed.`);
+          }
+          
+          // Print the full error as JSON for debugging
+          console.error(`[BUY AND SELL] Full error:`, JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+        } catch (logError) {
+          console.error(`[BUY AND SELL] Failed to get transaction logs:`, logError);
+        }
       }
       throw error;
     }
@@ -489,8 +531,22 @@ export class RaydiumSDK {
     } catch (error) {
       console.error(`[BUY AND SELL] Error during sell:`, error);
       if (error instanceof SendTransactionError) {
-        const logs = await error.getLogs(this.program.connection);
-        console.error(`[BUY AND SELL] Transaction logs:`, logs);
+        try {
+          // Try to get logs but handle potential errors as these properties might be private
+          const logs = await error.getLogs(this.program.connection).catch(() => null);
+          console.error(`[BUY AND SELL] Transaction error details:`, error.message);
+          
+          if (logs) {
+            console.error(`[BUY AND SELL] Transaction logs:`, logs);
+          } else {
+            console.error(`[BUY AND SELL] No transaction logs available. Simulation may have failed.`);
+          }
+          
+          // Print the full error as JSON for debugging
+          console.error(`[BUY AND SELL] Full error:`, JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+        } catch (logError) {
+          console.error(`[BUY AND SELL] Failed to get transaction logs:`, logError);
+        }
       }
       throw error;
     }
