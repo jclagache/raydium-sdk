@@ -22,9 +22,9 @@ export class RaydiumSDK {
     this.cachePools = cachePools ?? null;
     Raydium.load({
       connection: provider.connection,
-      owner: provider.wallet.publicKey,
+      owner: provider.wallet.payer,
       cluster: "mainnet",
-      jupTokenType: JupTokenType.ALL
+      jupTokenType: JupTokenType.ALL,
     }).then((instance) => {
       this.program = instance;
     });
@@ -117,6 +117,7 @@ export class RaydiumSDK {
     finality: Finality = DEFAULT_FINALITY
   ): Promise<TransactionResult> {
     try {
+
       await this.program.fetchChainTime();
 
       const wsolMint = new PublicKey(TOKEN_WSOL.address);
