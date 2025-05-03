@@ -132,6 +132,7 @@ export class RaydiumSDK {
         let poolData = poolCache.pools;
 
         if (!poolData) {
+          console.log('fetching all pool basic info, this might take a while (more than 1 minutes)..')
           poolData = await this.program.tradeV2.fetchRoutePoolBasicInfo();
           if (poolData) {
             poolCache.setPools(poolData);
@@ -140,8 +141,8 @@ export class RaydiumSDK {
           }
         }
 
-        if (!poolData) {
-          throw new Error("Pool data is null");
+        if (poolData.ammPools.length === 0 && poolData.clmmPools.length === 0 && poolData.cpmmPools.length === 0) {
+          throw new Error("ammPools, clmmPools and cpmmPools are empty");
         }
 
         routes = this.getAllRoute(inputMint, outputMint, poolData.clmmPools, poolData.ammPools, poolData.cpmmPools);
