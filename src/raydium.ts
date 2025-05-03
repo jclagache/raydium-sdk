@@ -1,5 +1,5 @@
 import { Provider } from "@coral-xyz/anchor";
-import { BasicPoolInfo, JupTokenType, Raydium, TxVersion, Token, toApiV3Token, ReturnTypeGetAllRoute, ReturnTypeFetchMultipleMintInfos, AmmRpcData, ComputeAmountOutParam, ClmmRpcData, ReturnTypeFetchMultiplePoolTickArrays, ComputeClmmPoolInfo, ComputeRoutePathType, CpmmComputeData } from "@raydium-io/raydium-sdk-v2";
+import { BasicPoolInfo, JupTokenType, Raydium, TxVersion, Token, toApiV3Token, ReturnTypeGetAllRoute, ReturnTypeFetchMultipleMintInfos, AmmRpcData, ComputeAmountOutParam, ClmmRpcData, ReturnTypeFetchMultiplePoolTickArrays, ComputeClmmPoolInfo, ComputeRoutePathType, CpmmComputeData, Router } from "@raydium-io/raydium-sdk-v2";
 import { Commitment, Finality, Keypair, PublicKey, SendTransactionError } from "@solana/web3.js";
 import { PriorityFee, TransactionResult } from "./types.js";
 import { DEFAULT_COMMITMENT, DEFAULT_FINALITY } from "./util.js";
@@ -224,6 +224,7 @@ export class RaydiumSDK {
       });
 
       const { execute, transactions } = await this.program.tradeV2.swap({
+        routeProgram: Router,
         txVersion: TxVersion.V0,
         swapInfo: targetRoute,
         swapPoolKeys: poolKeys,
@@ -231,8 +232,6 @@ export class RaydiumSDK {
           associatedOnly: true,
           checkCreateATAOwner: true,
         },
-        routeProgram: new PublicKey(poolKeys[0].id),
-        feePayer: buyer.publicKey,
         computeBudgetConfig: {
           units: 600000,
           microLamports: 465915,
@@ -404,6 +403,7 @@ export class RaydiumSDK {
       });
 
       const { execute, transactions } = await this.program.tradeV2.swap({
+        routeProgram: Router,
         txVersion: TxVersion.V0,
         swapInfo: targetRoute,
         swapPoolKeys: poolKeys,
@@ -411,8 +411,6 @@ export class RaydiumSDK {
           associatedOnly: true,
           checkCreateATAOwner: true,
         },
-        routeProgram: new PublicKey(poolKeys[0].id),
-        feePayer: seller.publicKey,
         computeBudgetConfig: {
           units: 600000,
           microLamports: 465915,
