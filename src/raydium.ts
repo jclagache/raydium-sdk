@@ -434,15 +434,23 @@ export class RaydiumSDK {
     commitment: Commitment = DEFAULT_COMMITMENT,
     finality: Finality = DEFAULT_FINALITY
   ): Promise<TransactionResult> {
-    const buyResult = await this.buy(
-      buyerSeller,
-      mint,
-      buyAmountSol,
-      slippageBasisPoints,
-      priorityFees,
-      commitment,
-      finality
-    );
+    let buyResult: TransactionResult;
+    let sellResult: TransactionResult;
+
+    try {
+      buyResult = await this.buy(
+        buyerSeller,
+        mint,
+        buyAmountSol,
+        slippageBasisPoints,
+        priorityFees,
+        commitment,
+        finality
+      );
+    } catch (error) {
+      console.error(`[BUY AND SELL] Error during buy:`, error);
+      throw error;
+    }
 
     const ata = await getAssociatedTokenAddress(
       mint,
@@ -455,15 +463,20 @@ export class RaydiumSDK {
     );
     const amountToSell = BigInt(accountInfo.amount.toString());
 
-    const sellResult = await this.sell(
-      buyerSeller,
-      mint,
-      amountToSell,
-      slippageBasisPoints,
-      priorityFees,
-      commitment,
-      finality
-    );
+    try {
+      sellResult = await this.sell(
+        buyerSeller,
+        mint,
+        amountToSell,
+        slippageBasisPoints,
+        priorityFees,
+        commitment,
+        finality
+      );
+    } catch (error) {
+      console.error(`[BUY AND SELL] Error during sell:`, error);
+      throw error;
+    }
 
     return {
       success: sellResult.success && buyResult.success,
