@@ -1,10 +1,10 @@
 import { Provider } from "@coral-xyz/anchor";
-import { BasicPoolInfo, JupTokenType, Raydium, TxVersion, Token, ApiV3Token, toApiV3Token, ReturnTypeGetAllRoute, ReturnTypeFetchMultipleMintInfos, AmmRpcData, ComputeAmountOutParam, ClmmRpcData, ReturnTypeFetchMultiplePoolTickArrays, ComputeClmmPoolInfo, ComputeRoutePathType, CpmmComputeData } from "@raydium-io/raydium-sdk-v2";
-import { Commitment, Finality, Keypair, PublicKey, Transaction, Connection as SolanaConnection, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
+import { BasicPoolInfo, JupTokenType, Raydium, TxVersion, Token, toApiV3Token, ReturnTypeGetAllRoute, ReturnTypeFetchMultipleMintInfos, AmmRpcData, ComputeAmountOutParam, ClmmRpcData, ReturnTypeFetchMultiplePoolTickArrays, ComputeClmmPoolInfo, ComputeRoutePathType, CpmmComputeData } from "@raydium-io/raydium-sdk-v2";
+import { Commitment, Finality, Keypair, PublicKey, SendTransactionError } from "@solana/web3.js";
 import { PriorityFee, TransactionResult } from "./types.js";
-import { DEFAULT_COMMITMENT, DEFAULT_FINALITY, getProjectPath } from "./util.js";
+import { DEFAULT_COMMITMENT, DEFAULT_FINALITY } from "./util.js";
 import { TOKEN_WSOL } from "@raydium-io/raydium-sdk-v2";
-import { TokenAmount, toToken } from "@raydium-io/raydium-sdk-v2";
+import { TokenAmount } from "@raydium-io/raydium-sdk-v2";
 import { getAssociatedTokenAddress, getAccount, getAssociatedTokenAddressSync, unpackAccount } from "@solana/spl-token";
 import { Connection } from "@solana/web3.js";
 import { InMemoryRouteCache, FilePoolCache, CacheRoutesData, InMemoryRouteDataCache, CacheRoutes, CachePools } from "./cache.js";
@@ -250,7 +250,11 @@ export class RaydiumSDK {
         signature
       };
     } catch (error) {
-      console.error(`[BUY] Error during swap:`, error);
+      console.error(`[BUY] Error during buy:`, error);
+      if (error instanceof SendTransactionError) {
+        const logs = await error.getLogs(this.program.connection);
+        console.error(`[BUY] Transaction logs:`, logs);
+      }
       throw error;
     }
   }
@@ -417,7 +421,11 @@ export class RaydiumSDK {
         signature
       };
     } catch (error) {
-      console.error(`[SELL] Error during swap:`, error);
+      console.error(`[SELL] Error during sell:`, error);
+      if (error instanceof SendTransactionError) {
+        const logs = await error.getLogs(this.program.connection);
+        console.error(`[SELL] Transaction logs:`, logs);
+      }
       throw error;
     }
   }
@@ -450,6 +458,10 @@ export class RaydiumSDK {
       );
     } catch (error) {
       console.error(`[BUY AND SELL] Error during buy:`, error);
+      if (error instanceof SendTransactionError) {
+        const logs = await error.getLogs(this.program.connection);
+        console.error(`[BUY AND SELL] Transaction logs:`, logs);
+      }
       throw error;
     }
 
@@ -476,6 +488,10 @@ export class RaydiumSDK {
       );
     } catch (error) {
       console.error(`[BUY AND SELL] Error during sell:`, error);
+      if (error instanceof SendTransactionError) {
+        const logs = await error.getLogs(this.program.connection);
+        console.error(`[BUY AND SELL] Transaction logs:`, logs);
+      }
       throw error;
     }
 
