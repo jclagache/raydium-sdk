@@ -1,19 +1,20 @@
 import { Provider } from "@coral-xyz/anchor";
-import { BasicPoolInfo, JupTokenType, Raydium, TxVersion, Token, ApiV3Token, toApiV3Token } from "@raydium-io/raydium-sdk-v2";
-import { Commitment, Finality, Keypair, PublicKey } from "@solana/web3.js";
+import { BasicPoolInfo, JupTokenType, Raydium, TxVersion, Token, ApiV3Token, toApiV3Token, ReturnTypeGetAllRoute, ReturnTypeFetchMultipleMintInfos, AmmRpcData, ComputeAmountOutParam, ClmmRpcData, ReturnTypeFetchMultiplePoolTickArrays, ComputeClmmPoolInfo, ComputeRoutePathType, CpmmComputeData } from "@raydium-io/raydium-sdk-v2";
+import { Commitment, Finality, Keypair, PublicKey, Transaction, Connection as SolanaConnection, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
 import { PriorityFee, TransactionResult } from "./types.js";
 import { DEFAULT_COMMITMENT, DEFAULT_FINALITY, getProjectPath } from "./util.js";
 import { TOKEN_WSOL } from "@raydium-io/raydium-sdk-v2";
 import { TokenAmount, toToken } from "@raydium-io/raydium-sdk-v2";
-import { getAssociatedTokenAddress, getAccount } from "@solana/spl-token";
+import { getAssociatedTokenAddress, getAccount, getAssociatedTokenAddressSync, unpackAccount } from "@solana/spl-token";
 import { Connection } from "@solana/web3.js";
-import path from "path";
-import fs from "fs";
-import jsonfile from "jsonfile";
+import { InMemoryRouteCache, FilePoolCache, CacheRoutesData, InMemoryRouteDataCache, CacheRoutes, CachePools } from "./cache.js";
+
 
 export class RaydiumSDK {
   public program!: Raydium;
   private cachePools: CachePools | null = null;
+  private cacheRoutes: CacheRoutes = InMemoryRouteCache.getInstance();
+  private cacheRoutesData: CacheRoutesData = InMemoryRouteDataCache.getInstance();
   constructor(provider: Provider, cachePools?: CachePools) {
     if (!provider.wallet) {
       throw new Error("Provider wallet is undefined");
@@ -45,6 +46,64 @@ export class RaydiumSDK {
     throw new Error("createAndBuyToken is not implemented.");
   }
 
+  async fetchSwapRoutesData(inputMint: string | PublicKey, outputMint: string | PublicKey, routes?: ReturnTypeGetAllRoute): Promise<{
+    mintInfos: ReturnTypeFetchMultipleMintInfos;
+    ammPoolsRpcInfo: Record<string, AmmRpcData>;
+    ammSimulateCache: Record<string, ComputeAmountOutParam["poolInfo"]>;
+    clmmPoolsRpcInfo: Record<string, ClmmRpcData>;
+    computeClmmPoolInfo: Record<string, ComputeClmmPoolInfo>;
+    computePoolTickData: ReturnTypeFetchMultiplePoolTickArrays;
+    computeCpmmData: Record<string, CpmmComputeData>;
+    routePathDict: ComputeRoutePathType;
+  }> {
+    const inputMintStr = typeof inputMint === 'string' ? inputMint : inputMint.toBase58();
+    const outputMintStr = typeof outputMint === 'string' ? outputMint : outputMint.toBase58();
+
+    // Check the route data cache
+    const cachedRouteData = this.cacheRoutesData.getRoutesData(
+      inputMint instanceof PublicKey ? inputMint : new PublicKey(inputMint),
+      outputMint instanceof PublicKey ? outputMint : new PublicKey(outputMint)
+    );
+
+    if (cachedRouteData) {
+      return cachedRouteData;
+    }
+
+    // If routes is not provided, get routes first
+    if (!routes) {
+      const inputMintPK = inputMint instanceof PublicKey ? inputMint : new PublicKey(inputMint);
+      const outputMintPK = outputMint instanceof PublicKey ? outputMint : new PublicKey(outputMint);
+      
+      routes = this.getAllRoute(inputMintPK, outputMintPK);
+      if (Object.keys(routes.directPath).length === 0 && Object.keys(routes.routePathDict).length === 0) {
+        return Promise.resolve({
+          mintInfos: {},
+          ammPoolsRpcInfo: {},
+          ammSimulateCache: {},
+          clmmPoolsRpcInfo: {},
+          computeClmmPoolInfo: {},
+          computePoolTickData: {},
+          computeCpmmData: {},
+          routePathDict: {}
+        });
+      }
+    }
+
+    const routesData = await this.program.tradeV2.fetchSwapRoutesData({
+      routes,
+      inputMint,
+      outputMint
+    });
+    
+    // Cache the obtained data
+    this.cacheRoutesData.setRoutesData(
+      routesData,
+      inputMint,
+      outputMint
+    );
+    return routesData;
+  }
+
   /**
    * Buy a SPL token using SOL via Raydium swap.
    */
@@ -57,70 +116,73 @@ export class RaydiumSDK {
     commitment: Commitment = DEFAULT_COMMITMENT,
     finality: Finality = DEFAULT_FINALITY
   ): Promise<TransactionResult> {
-    const wsolMint = new PublicKey(TOKEN_WSOL.address);
-    const inputMint = wsolMint;
-    const outputMint = mint;
-    
     try {
       await this.program.fetchChainTime();
-      
+
+      const wsolMint = new PublicKey(TOKEN_WSOL.address);
+      const inputMint = wsolMint;
+      const outputMint = mint;
+
       const inputMintStr = inputMint.toBase58();
       const outputMintStr = outputMint.toBase58();
-      
-      const poolCache = this.cachePools ?? FilePoolCache.getInstance();
-      let poolData = poolCache.pools;
-      
-      if (!poolData) {
-        poolData = await this.program.tradeV2.fetchRoutePoolBasicInfo();
-        poolCache.setPools(poolData);
-      }
-      
-      const routes = this.program.tradeV2.getAllRoute({
-        inputMint,
-        outputMint,
-        ...poolData
-      });
-      
+
+      let routes = this.getAllRoute(inputMint, outputMint);
       if (Object.keys(routes.directPath).length === 0 && Object.keys(routes.routePathDict).length === 0) {
-        throw new Error(`No swap route found between ${inputMintStr} and ${outputMintStr}`);
+        const poolCache = this.cachePools ?? FilePoolCache.getInstance();
+        let poolData = poolCache.pools;
+
+        if (!poolData) {
+          poolData = await this.program.tradeV2.fetchRoutePoolBasicInfo();
+          if (poolData) {
+            poolCache.setPools(poolData);
+          } else {
+            throw new Error("Failed to fetch pool data");
+          }
+        }
+
+        if (!poolData) {
+          throw new Error("Pool data is null");
+        }
+
+        routes = this.getAllRoute(inputMint, outputMint, poolData.clmmPools, poolData.ammPools, poolData.cpmmPools);
+
+        if (Object.keys(routes.directPath).length === 0 && Object.keys(routes.routePathDict).length === 0) {
+          throw new Error(`No swap route found between ${inputMintStr} and ${outputMintStr}`);
+        }
       }
+
+      let routesData = await this.fetchSwapRoutesData(inputMint, outputMint, routes);
       
-      const { 
-        routePathDict, 
-        mintInfos, 
-        ammPoolsRpcInfo, 
-        ammSimulateCache,
-        clmmPoolsRpcInfo, 
-        computePoolTickData,
-        computeCpmmData
-      } = await this.program.tradeV2.fetchSwapRoutesData({
-        routes,
-        inputMint,
-        outputMint
-      });
-      
-      if (!mintInfos[inputMintStr] || !mintInfos[outputMintStr]) {
-        throw new Error(`Missing mint info for ${!mintInfos[inputMintStr] ? inputMintStr : outputMintStr}`);
+      if (Object.keys(routesData.mintInfos).length === 0) {
+        routesData = await this.program.tradeV2.fetchSwapRoutesData({
+          routes,
+          inputMint,
+          outputMint
+        });
       }
-      
+
+      if (!routesData.mintInfos[inputMintStr] || !routesData.mintInfos[outputMintStr]) {
+        throw new Error(`Missing mint info for ${!routesData.mintInfos[inputMintStr] ? inputMintStr : outputMintStr}`);
+      }
+
       const inputAmount = buyAmountSol.toString();
-      
+
       const inputTokenAmount = new TokenAmount(
         new Token({
           mint: inputMintStr,
-          decimals: mintInfos[inputMintStr].decimals,
-          isToken2022: mintInfos[inputMintStr].programId.equals(new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb')),
+          decimals: routesData.mintInfos[inputMintStr].decimals,
+          isToken2022: routesData.mintInfos[inputMintStr].programId.equals(new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb')),
         }),
         inputAmount
       );
-      
+
       const slippage = Number(slippageBasisPoints) / 10000;
       const epochInfo = await this.program.connection.getEpochInfo();
-      
+
       const outputTokenApi = toApiV3Token({
         address: outputMintStr,
-        programId: mintInfos[outputMintStr].programId.toBase58(),
-        decimals: mintInfos[outputMintStr].decimals,
+        programId: routesData.mintInfos[outputMintStr].programId.toBase58(),
+        decimals: routesData.mintInfos[outputMintStr].decimals,
         name: outputMintStr.slice(0, 5),
         symbol: outputMintStr.slice(0, 5),
         logoURI: '',
@@ -130,20 +192,20 @@ export class RaydiumSDK {
       const swapRoutes = this.program.tradeV2.getAllRouteComputeAmountOut({
         inputTokenAmount,
         directPath: routes.directPath.map(
-          (p) => ammSimulateCache[p.id.toBase58()] || 
-                computePoolTickData[p.id.toBase58()] || 
-                computeCpmmData[p.id.toBase58()]
+          (p) => routesData.ammSimulateCache[p.id.toBase58()] ||
+            routesData.computePoolTickData[p.id.toBase58()] ||
+            routesData.computeCpmmData[p.id.toBase58()]
         ),
-        routePathDict,
-        simulateCache: ammSimulateCache,
-        tickCache: computePoolTickData,
+        routePathDict: routesData.routePathDict,
+        simulateCache: routesData.ammSimulateCache,
+        tickCache: routesData.computePoolTickData,
         outputToken: outputTokenApi,
-        mintInfos,
+        mintInfos: routesData.mintInfos,
         slippage,
         chainTime: Math.floor(this.program.chainTimeData?.chainTime ?? Date.now() / 1000),
         epochInfo
       });
-      
+
       if (!swapRoutes.length) {
         if (buyAmountSol < BigInt(1e8)) {
           console.error(`[BUY] No swap routes found - Try with a larger amount (at least 0.1 SOL)`);
@@ -151,15 +213,15 @@ export class RaydiumSDK {
         }
         throw new Error("No swap route found");
       }
-      
+
       const targetRoute = swapRoutes[0];
-      
+
       const poolKeys = await this.program.tradeV2.computePoolToPoolKeys({
         pools: targetRoute.poolInfoList,
-        ammRpcData: ammPoolsRpcInfo,
-        clmmRpcData: clmmPoolsRpcInfo
+        ammRpcData: routesData.ammPoolsRpcInfo,
+        clmmRpcData: routesData.clmmPoolsRpcInfo
       });
-      
+
       const swapTxData = await this.program.tradeV2.swap({
         txVersion: TxVersion.V0,
         swapInfo: targetRoute,
@@ -175,13 +237,13 @@ export class RaydiumSDK {
           microLamports: 465915,
         }
       });
-      
+
       const tx = swapTxData.transactions[0];
       const signature = await this.program.connection.sendRawTransaction(
         tx.serialize(),
         { skipPreflight: false, preflightCommitment: commitment }
       );
-      
+
       return {
         success: true,
         signature
@@ -198,76 +260,96 @@ export class RaydiumSDK {
   async sell(
     seller: Keypair,
     mint: PublicKey,
-    sellTokenAmount: bigint,
+    sellAmount: bigint,
     slippageBasisPoints = BigInt(500),
     priorityFees?: PriorityFee,
     commitment: Commitment = DEFAULT_COMMITMENT,
     finality: Finality = DEFAULT_FINALITY
   ): Promise<TransactionResult> {
-    const wsolMint = new PublicKey(TOKEN_WSOL.address);
-    const inputMint = mint;
-    const outputMint = wsolMint;
-    
     try {
       await this.program.fetchChainTime();
-      
+
+      const wsolMint = new PublicKey(TOKEN_WSOL.address);
+      const inputMint = mint;
+      const outputMint = wsolMint;
+
       const inputMintStr = inputMint.toBase58();
       const outputMintStr = outputMint.toBase58();
-      
-      const poolCache = this.cachePools ?? FilePoolCache.getInstance();
-      let poolData = poolCache.pools;
-      
-      if (!poolData) {
-        poolData = await this.program.tradeV2.fetchRoutePoolBasicInfo();
-        poolCache.setPools(poolData);
-      }
-      
-      const routes = this.program.tradeV2.getAllRoute({
-        inputMint,
-        outputMint,
-        ...poolData
-      });
-      
+
+      let routes = this.getAllRoute(inputMint, outputMint);
       if (Object.keys(routes.directPath).length === 0 && Object.keys(routes.routePathDict).length === 0) {
-        throw new Error(`No swap route found between ${inputMintStr} and ${outputMintStr}`);
+        const poolCache = this.cachePools ?? FilePoolCache.getInstance();
+        let poolData = poolCache.pools;
+
+        if (!poolData) {
+          poolData = await this.program.tradeV2.fetchRoutePoolBasicInfo();
+          if (poolData) {
+            poolCache.setPools(poolData);
+          } else {
+            throw new Error("Failed to fetch pool data");
+          }
+        }
+
+        if (!poolData) {
+          throw new Error("Pool data is null");
+        }
+
+        routes = this.getAllRoute(inputMint, outputMint, poolData.clmmPools, poolData.ammPools, poolData.cpmmPools);
+
+        if (Object.keys(routes.directPath).length === 0 && Object.keys(routes.routePathDict).length === 0) {
+          throw new Error(`No swap route found between ${inputMintStr} and ${outputMintStr}`);
+        }
       }
-      
-      const { 
-        routePathDict, 
-        mintInfos, 
-        ammPoolsRpcInfo, 
-        ammSimulateCache,
-        clmmPoolsRpcInfo, 
-        computePoolTickData,
-        computeCpmmData
-      } = await this.program.tradeV2.fetchSwapRoutesData({
-        routes,
-        inputMint,
-        outputMint
-      });
-      
-      if (!mintInfos[inputMintStr] || !mintInfos[outputMintStr]) {
-        throw new Error(`Missing mint info for ${!mintInfos[inputMintStr] ? inputMintStr : outputMintStr}`);
+
+      let routesData = await this.fetchSwapRoutesData(inputMint, outputMint, routes);
+
+      if (Object.keys(routesData.mintInfos).length === 0) {
+        routesData = await this.program.tradeV2.fetchSwapRoutesData({
+          routes,
+          inputMint,
+          outputMint
+        });
       }
-      
-      const inputAmount = sellTokenAmount.toString();
-      
+
+      if (!routesData.mintInfos[inputMintStr] || !routesData.mintInfos[outputMintStr]) {
+        throw new Error(`Missing mint info for ${!routesData.mintInfos[inputMintStr] ? inputMintStr : outputMintStr}`);
+      }
+
+      const tokenAccount = getAssociatedTokenAddressSync(
+        mint,
+        seller.publicKey,
+        false,
+        routesData.mintInfos[inputMintStr].programId
+      );
+
+      const accountInfo = await this.program.connection.getAccountInfo(tokenAccount);
+      if (!accountInfo) {
+        throw new Error(`Token account ${tokenAccount.toBase58()} not found`);
+      }
+
+      const parsedTokenAccount = unpackAccount(tokenAccount, accountInfo);
+      if (parsedTokenAccount.amount < sellAmount) {
+        throw new Error(`Insufficient token balance. Have ${parsedTokenAccount.amount}, need ${sellAmount}`);
+      }
+
+      const inputAmount = sellAmount.toString();
+
       const inputTokenAmount = new TokenAmount(
         new Token({
           mint: inputMintStr,
-          decimals: mintInfos[inputMintStr].decimals,
-          isToken2022: mintInfos[inputMintStr].programId.equals(new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb')),
+          decimals: routesData.mintInfos[inputMintStr].decimals,
+          isToken2022: routesData.mintInfos[inputMintStr].programId.equals(new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb')),
         }),
         inputAmount
       );
-      
+
       const slippage = Number(slippageBasisPoints) / 10000;
       const epochInfo = await this.program.connection.getEpochInfo();
-      
+
       const outputTokenApi = toApiV3Token({
-        address: outputMintStr, 
-        programId: mintInfos[outputMintStr].programId.toBase58(),
-        decimals: mintInfos[outputMintStr].decimals,
+        address: outputMintStr,
+        programId: routesData.mintInfos[outputMintStr].programId.toBase58(),
+        decimals: routesData.mintInfos[outputMintStr].decimals,
         name: outputMintStr.slice(0, 5),
         symbol: outputMintStr.slice(0, 5),
         logoURI: '',
@@ -277,32 +359,36 @@ export class RaydiumSDK {
       const swapRoutes = this.program.tradeV2.getAllRouteComputeAmountOut({
         inputTokenAmount,
         directPath: routes.directPath.map(
-          (p) => ammSimulateCache[p.id.toBase58()] || 
-                computePoolTickData[p.id.toBase58()] || 
-                computeCpmmData[p.id.toBase58()]
+          (p) => routesData.ammSimulateCache[p.id.toBase58()] ||
+            routesData.computePoolTickData[p.id.toBase58()] ||
+            routesData.computeCpmmData[p.id.toBase58()]
         ),
-        routePathDict,
-        simulateCache: ammSimulateCache,
-        tickCache: computePoolTickData,
+        routePathDict: routesData.routePathDict,
+        simulateCache: routesData.ammSimulateCache,
+        tickCache: routesData.computePoolTickData,
         outputToken: outputTokenApi,
-        mintInfos,
+        mintInfos: routesData.mintInfos,
         slippage,
         chainTime: Math.floor(this.program.chainTimeData?.chainTime ?? Date.now() / 1000),
         epochInfo
       });
-      
+
       if (!swapRoutes.length) {
+        if (sellAmount < BigInt(10000)) {
+          console.error(`[SELL] No swap routes found - Try with a larger amount`);
+          throw new Error("No swap route found - Amount too small");
+        }
         throw new Error("No swap route found");
       }
-      
+
       const targetRoute = swapRoutes[0];
-      
+
       const poolKeys = await this.program.tradeV2.computePoolToPoolKeys({
         pools: targetRoute.poolInfoList,
-        ammRpcData: ammPoolsRpcInfo,
-        clmmRpcData: clmmPoolsRpcInfo
+        ammRpcData: routesData.ammPoolsRpcInfo,
+        clmmRpcData: routesData.clmmPoolsRpcInfo
       });
-      
+
       const swapTxData = await this.program.tradeV2.swap({
         txVersion: TxVersion.V0,
         swapInfo: targetRoute,
@@ -318,13 +404,13 @@ export class RaydiumSDK {
           microLamports: 465915,
         }
       });
-      
+
       const tx = swapTxData.transactions[0];
       const signature = await this.program.connection.sendRawTransaction(
         tx.serialize(),
         { skipPreflight: false, preflightCommitment: commitment }
       );
-      
+
       return {
         success: true,
         signature
@@ -385,6 +471,64 @@ export class RaydiumSDK {
     };
   }
 
+  getAllRoute(
+    inputMint: PublicKey,
+    outputMint: PublicKey,
+    clmmPools?: BasicPoolInfo[],
+    ammPools?: BasicPoolInfo[],
+    cpmmPools?: BasicPoolInfo[],
+  ): ReturnTypeGetAllRoute {
+    const inputMintStr = inputMint.toBase58();
+    const outputMintStr = outputMint.toBase58();
+
+    console.log(`[getAllRoute] Checking cached routes for ${inputMintStr} → ${outputMintStr}`);
+
+    const cachedRoutes = this.cacheRoutes.getRoutes(inputMint, outputMint);
+    if (cachedRoutes) {
+      console.log(`[getAllRoute] Cache hit! Found routes in cache for ${inputMintStr} → ${outputMintStr}`);
+      return cachedRoutes;
+    }
+
+    // Si les pools ne sont pas fournis, on ne peut pas calculer de routes
+    if (!clmmPools || !ammPools || !cpmmPools) {
+      console.log(`[getAllRoute] No pools provided, returning empty routes`);
+      // Créer une structure ReturnTypeGetAllRoute vide valide sans appeler le SDK
+      return {
+        directPath: [],
+        routePathDict: {},
+        addLiquidityPools: [],
+        needSimulate: [],
+        needTickArray: [],
+        cpmmPoolList: []
+      } as ReturnTypeGetAllRoute;
+    }
+
+    console.log(`[getAllRoute] Cache miss. Fetching routes from chain for ${inputMintStr} → ${outputMintStr}`);
+    console.log(`[getAllRoute] Pools count - AMM: ${ammPools.length}, CLMM: ${clmmPools.length}, CPMM: ${cpmmPools.length}`);
+
+    const routes = this.program.tradeV2.getAllRoute({
+      inputMint,
+      outputMint,
+      clmmPools,
+      ammPools,
+      cpmmPools,
+    });
+
+    console.log(`[getAllRoute] Routes found - Direct: ${routes.directPath.length}, Indirect: ${Object.keys(routes.routePathDict).length}`);
+
+    // Examiner la structure des routes directes trouvées
+    if (routes.directPath.length > 0) {
+      const firstRoute = routes.directPath[0];
+      console.log(`[getAllRoute] First direct route details - ID: ${firstRoute.id.toBase58()}, Type: ${firstRoute.version}`);
+      console.log(`[getAllRoute] First direct route mints - MintA: ${firstRoute.mintA.toBase58()}, MintB: ${firstRoute.mintB.toBase58()}`);
+    }
+
+    this.cacheRoutes.setRoutes(routes, inputMint, outputMint);
+    console.log(`[getAllRoute] Routes saved to cache for ${inputMintStr} → ${outputMintStr}`);
+
+    return routes;
+  }
+
   /**
    * Check if a SPL token is tradable on Raydium by verifying if swap routes exist.
    * @param mint The SPL token mint address to check
@@ -399,32 +543,13 @@ export class RaydiumSDK {
         cluster: "mainnet",
         jupTokenType: JupTokenType.ALL
       });
-      
-      const poolCache = cachePools ?? FilePoolCache.getInstance();
-      let poolData = poolCache.pools;
-      if (!poolData) {
-        poolData = await raydium.tradeV2.fetchRoutePoolBasicInfo();
-        poolCache.setPools(poolData);
-      }
-      
-      const routesToToken = raydium.tradeV2.getAllRoute({
-        inputMint: wsolMint,
-        outputMint: mint,
-        clmmPools: poolData.clmmPools,
-        ammPools: poolData.ammPools,
-        cpmmPools: poolData.cpmmPools,
-      });      
-      const routesToSol = raydium.tradeV2.getAllRoute({
-        inputMint: mint,
-        outputMint: wsolMint,
-        clmmPools: poolData.clmmPools,
-        ammPools: poolData.ammPools,
-        cpmmPools: poolData.cpmmPools,
-      });
-      
-      const isTradable = (Object.keys(routesToToken.directPath).length > 0 || Object.keys(routesToToken.routePathDict).length > 0) &&
-        (Object.keys(routesToSol.directPath).length > 0 || Object.keys(routesToSol.routePathDict).length > 0);
-      return isTradable;
+
+      const pools = await raydium.api.fetchPoolByMints({
+        mint1: wsolMint,
+        mint2: mint
+      })
+      return pools.data.length > 0;
+
     } catch (error) {
       console.error('Error checking if token is tradable:', error);
       return false;
@@ -432,110 +557,12 @@ export class RaydiumSDK {
   }
 }
 
-export interface CachePools {
-  pools: {
-    ammPools: BasicPoolInfo[];
-    clmmPools: BasicPoolInfo[];
-    cpmmPools: BasicPoolInfo[];
-  } | null;
-  setPools: (pools: {
-    ammPools: BasicPoolInfo[];
-    clmmPools: BasicPoolInfo[];
-    cpmmPools: BasicPoolInfo[];
-  }) => void;
-}
 
-class FilePoolCache implements CachePools {
-  private static instance: FilePoolCache;
-  private readonly filePath: string;
-  private readonly cacheTime: number = 1000 * 60 * 60 * 24; // 24 hours
 
-  private constructor() {
-    this.filePath = path.join(getProjectPath(), 'pool_data.json');
-  }
 
-  private isCacheValid(data: { time: number }): boolean {
-    return Date.now() - data.time <= this.cacheTime;
-  }
 
-  static getInstance(): FilePoolCache {
-    if (!FilePoolCache.instance) {
-      FilePoolCache.instance = new FilePoolCache();
-    }
-    return FilePoolCache.instance;
-  }
 
-  get pools(): {
-    ammPools: BasicPoolInfo[];
-    clmmPools: BasicPoolInfo[];
-    cpmmPools: BasicPoolInfo[];
-  } | null {
-    try {
-      const data = jsonfile.readFileSync(this.filePath) as {
-        time: number
-        ammPools: BasicPoolInfo[]
-        clmmPools: BasicPoolInfo[]
-        cpmmPools: BasicPoolInfo[]
-      }
-      if (!this.isCacheValid(data)) {
-        return null;
-      }
-      return {
-        ammPools: data.ammPools.map((p) => ({
-          ...p,
-          id: new PublicKey(p.id),
-          mintA: new PublicKey(p.mintA),
-          mintB: new PublicKey(p.mintB),
-        })),
-        clmmPools: data.clmmPools.map((p) => ({
-          ...p,
-          id: new PublicKey(p.id),
-          mintA: new PublicKey(p.mintA),
-          mintB: new PublicKey(p.mintB),
-        })),
-        cpmmPools: data.cpmmPools.map((p) => ({
-          ...p,
-          id: new PublicKey(p.id),
-          mintA: new PublicKey(p.mintA),
-          mintB: new PublicKey(p.mintB),
-        })),
-      };
-    } catch {
-      return null;
-    }
-  }
 
-  setPools(pools: {
-    ammPools: BasicPoolInfo[];
-    clmmPools: BasicPoolInfo[];
-    cpmmPools: BasicPoolInfo[];
-  }): void {
-    const processChunk = (pools: BasicPoolInfo[]) => {
-      return pools.map((p) => ({
-        id: p.id.toBase58(),
-        version: p.version,
-        mintA: p.mintA.toBase58(),
-        mintB: p.mintB.toBase58(),
-      }));
-    };
-  
-    const processedData = {
-      time: Date.now(),
-      ammPools: processChunk(pools.ammPools),
-      clmmPools: processChunk(pools.clmmPools),
-      cpmmPools: processChunk(pools.cpmmPools),
-    };
-  
-    try {
-      const dirPath = path.join(getProjectPath(), 'data');
-      if (!fs.existsSync(dirPath)) {
-        fs.mkdirSync(dirPath, { recursive: true });
-      }
-      
-      jsonfile.writeFileSync(this.filePath, processedData);
-    } catch (e) {
-      console.error('Cache pool data failed', e);
-      // Ignore write errors
-    }
-  }
-}
+
+
+
