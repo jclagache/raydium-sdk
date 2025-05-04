@@ -13,30 +13,12 @@ describe("RaydiumSDK", () => {
 
   // Initialiser la connection et le SDK avant tous les tests
   beforeAll(async () => {
-    // Créer une connection et un wallet
-    connection = new Connection('https://api.devnet.solana.com', 'confirmed');
-    
-    // Créer un keypair de test
+    // Créer une connection et un wallet de test
+    connection = new Connection('https://api.mainnet-beta.solana.com', 'confirmed');
     testWallet = Keypair.generate();
     
-    // Créer un mock du provider
-    const mockProvider = {
-      connection,
-      wallet: {
-        publicKey: testWallet.publicKey,
-        signTransaction: async (tx: any) => {
-          return tx;
-        },
-        signAllTransactions: async (txs: any[]) => {
-          return txs;
-        }
-      },
-      opts: { commitment: 'confirmed' }
-    };
-    
-    // Initialiser RaydiumSDK avec le mock provider
-    // @ts-ignore - Nous utilisons un mock du provider
-    raydiumSDK = new RaydiumSDK(mockProvider);
+    // Initialiser RaydiumSDK avec la connection et le wallet
+    raydiumSDK = new RaydiumSDK(connection, testWallet);
     
     // Attendre un peu pour que le SDK se charge
     await new Promise(resolve => setTimeout(resolve, 1000));
@@ -64,10 +46,16 @@ describe("RaydiumSDK", () => {
     // S'assurer que l'instance a été créée
     expect(raydiumSDK).toBeDefined();
     
-    // Test constructeur avec erreur attendue (aucun provider)
+    // Test constructeur avec erreur attendue (aucune connection)
     expect(() => {
       // @ts-ignore - intention de tester un cas d'erreur
-      new RaydiumSDK(null);
+      new RaydiumSDK(null, testWallet);
+    }).toThrow();
+    
+    // Test constructeur avec erreur attendue (aucun owner)
+    expect(() => {
+      // @ts-ignore - intention de tester un cas d'erreur
+      new RaydiumSDK(connection, null);
     }).toThrow();
   });
 

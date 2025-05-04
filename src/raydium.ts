@@ -11,7 +11,7 @@ import { Connection } from "@solana/web3.js";
 export class RaydiumSDK {
 
   public program!: Raydium;
-  
+
   /**
    * Check if a SPL token is tradable on Raydium by verifying if pools exist.
    * @param mint The SPL token mint address to check
@@ -32,7 +32,7 @@ export class RaydiumSDK {
         mint2: mint,
         sort: 'liquidity'
       });
-      
+
       // Si on trouve au moins un pool, le token est tradable
       return pools && pools.data.length > 0;
     } catch (error) {
@@ -41,17 +41,19 @@ export class RaydiumSDK {
     }
   }
 
-  constructor(provider: Provider) {
-    if (!provider.wallet) {
-      throw new Error("Provider wallet is undefined");
+  constructor(connection: Connection, owner: Keypair | PublicKey) {
+    if (!owner) {
+      throw new Error("Owner is undefined");
     }
-
+    if (!connection) {
+      throw new Error("Connection is undefined");
+    }
     Raydium.load({
-      connection: provider.connection,
-      owner: provider.wallet.payer,
-      cluster: "mainnet",
-      disableFeatureCheck: true,
-      blockhashCommitment: 'finalized'
+      connection: connection,
+        owner: owner,
+        cluster: "mainnet",
+        disableFeatureCheck: true,
+        blockhashCommitment: 'finalized'
     }).then((instance) => {
       this.program = instance;
     });
@@ -186,9 +188,9 @@ export class RaydiumSDK {
       if (!seller.secretKey || seller.secretKey.length === 0) {
         throw new Error(`Cannot use seller key ${seller.publicKey.toString()} for signing - missing secret key`);
       }
-      
+
       const wsolMint = new PublicKey(TOKEN_WSOL.address);
-      
+
       // Chercher un pool pour cette paire
       const pools = await this.program.api.fetchPoolByMints({
         mint1: mint,
@@ -246,7 +248,7 @@ export class RaydiumSDK {
       };
     } catch (error) {
       console.error(`[SELL] Error during sell:`, error);
-      
+
       if (error instanceof SendTransactionError) {
         try {
           const logs = await error.getLogs(this.program.connection).catch(() => null);
@@ -259,108 +261,108 @@ export class RaydiumSDK {
           console.error(`[SELL] Failed to get transaction logs:`, logError);
         }
       }
-      
+
       throw error;
     }
   }
 
-    /**
-   * Buy a SPL token with SOL, then immediately sell it back to SOL.
-   * Useful for arbitrage or testing.
-   */
-    async buyAndSell(
-      buyerSeller: Keypair,
-      mint: PublicKey,
-      buyAmountSol: bigint,
-      slippageBasisPoints = BigInt(500),
-      priorityFees?: PriorityFee,
-      commitment: Commitment = DEFAULT_COMMITMENT,
-      finality: Finality = DEFAULT_FINALITY
-    ): Promise<TransactionResult> {
-      let buyResult: TransactionResult;
-      let sellResult: TransactionResult;
-  
-      try {
-        buyResult = await this.buy(
-          buyerSeller,
-          mint,
-          buyAmountSol,
-          slippageBasisPoints,
-          priorityFees,
-          commitment,
-          finality
-        );
-      } catch (error) {
-        console.error(`[BUY AND SELL] Error during buy:`, error);
-        if (error instanceof SendTransactionError) {
-          try {
-            // Try to get logs but handle potential errors as these properties might be private
-            const logs = await error.getLogs(this.program.connection).catch(() => null);
-            console.error(`[BUY AND SELL] Transaction error details:`, error.message);
-            
-            if (logs) {
-              console.error(`[BUY AND SELL] Transaction logs:`, logs);
-            } else {
-              console.error(`[BUY AND SELL] No transaction logs available. Simulation may have failed.`);
-            }
-            
-            // Print the full error as JSON for debugging
-            console.error(`[BUY AND SELL] Full error:`, JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
-          } catch (logError) {
-            console.error(`[BUY AND SELL] Failed to get transaction logs:`, logError);
-          }
-        }
-        throw error;
-      }
-      const ata = await getAssociatedTokenAddress(
+  /**
+ * Buy a SPL token with SOL, then immediately sell it back to SOL.
+ * Useful for arbitrage or testing.
+ */
+  async buyAndSell(
+    buyerSeller: Keypair,
+    mint: PublicKey,
+    buyAmountSol: bigint,
+    slippageBasisPoints = BigInt(500),
+    priorityFees?: PriorityFee,
+    commitment: Commitment = DEFAULT_COMMITMENT,
+    finality: Finality = DEFAULT_FINALITY
+  ): Promise<TransactionResult> {
+    let buyResult: TransactionResult;
+    let sellResult: TransactionResult;
+
+    try {
+      buyResult = await this.buy(
+        buyerSeller,
         mint,
-        buyerSeller.publicKey
+        buyAmountSol,
+        slippageBasisPoints,
+        priorityFees,
+        commitment,
+        finality
       );
-      const accountInfo = await getAccount(
-        this.program.connection,
-        ata,
-        commitment
-      );
-      const amountToSell = BigInt(accountInfo.amount.toString());
-  
-      try {
-        sellResult = await this.sell(
-          buyerSeller,
-          mint,
-          amountToSell,
-          slippageBasisPoints,
-          priorityFees,
-          commitment,
-          finality
-        );
-      } catch (error) {
-        console.error(`[BUY AND SELL] Error during sell:`, error);
-        if (error instanceof SendTransactionError) {
-          try {
-            // Try to get logs but handle potential errors as these properties might be private
-            const logs = await error.getLogs(this.program.connection).catch(() => null);
-            console.error(`[BUY AND SELL] Transaction error details:`, error.message);
-            
-            if (logs) {
-              console.error(`[BUY AND SELL] Transaction logs:`, logs);
-            } else {
-              console.error(`[BUY AND SELL] No transaction logs available. Simulation may have failed.`);
-            }
-            
-            // Print the full error as JSON for debugging
-            console.error(`[BUY AND SELL] Full error:`, JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
-          } catch (logError) {
-            console.error(`[BUY AND SELL] Failed to get transaction logs:`, logError);
+    } catch (error) {
+      console.error(`[BUY AND SELL] Error during buy:`, error);
+      if (error instanceof SendTransactionError) {
+        try {
+          // Try to get logs but handle potential errors as these properties might be private
+          const logs = await error.getLogs(this.program.connection).catch(() => null);
+          console.error(`[BUY AND SELL] Transaction error details:`, error.message);
+
+          if (logs) {
+            console.error(`[BUY AND SELL] Transaction logs:`, logs);
+          } else {
+            console.error(`[BUY AND SELL] No transaction logs available. Simulation may have failed.`);
           }
+
+          // Print the full error as JSON for debugging
+          console.error(`[BUY AND SELL] Full error:`, JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+        } catch (logError) {
+          console.error(`[BUY AND SELL] Failed to get transaction logs:`, logError);
         }
-        throw error;
       }
-  
-      return {
-        success: sellResult.success && buyResult.success,
-        signature: sellResult.signature,
-      };
+      throw error;
     }
+    const ata = await getAssociatedTokenAddress(
+      mint,
+      buyerSeller.publicKey
+    );
+    const accountInfo = await getAccount(
+      this.program.connection,
+      ata,
+      commitment
+    );
+    const amountToSell = BigInt(accountInfo.amount.toString());
+
+    try {
+      sellResult = await this.sell(
+        buyerSeller,
+        mint,
+        amountToSell,
+        slippageBasisPoints,
+        priorityFees,
+        commitment,
+        finality
+      );
+    } catch (error) {
+      console.error(`[BUY AND SELL] Error during sell:`, error);
+      if (error instanceof SendTransactionError) {
+        try {
+          // Try to get logs but handle potential errors as these properties might be private
+          const logs = await error.getLogs(this.program.connection).catch(() => null);
+          console.error(`[BUY AND SELL] Transaction error details:`, error.message);
+
+          if (logs) {
+            console.error(`[BUY AND SELL] Transaction logs:`, logs);
+          } else {
+            console.error(`[BUY AND SELL] No transaction logs available. Simulation may have failed.`);
+          }
+
+          // Print the full error as JSON for debugging
+          console.error(`[BUY AND SELL] Full error:`, JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+        } catch (logError) {
+          console.error(`[BUY AND SELL] Failed to get transaction logs:`, logError);
+        }
+      }
+      throw error;
+    }
+
+    return {
+      success: sellResult.success && buyResult.success,
+      signature: sellResult.signature,
+    };
+  }
 }
 
 
