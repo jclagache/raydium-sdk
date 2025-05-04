@@ -1,7 +1,7 @@
 import { Provider } from "@coral-xyz/anchor";
 import BN from "bn.js";
 import { ApiV3PoolInfoStandardItem, PoolFetchType, Raydium, TxVersion } from "@raydium-io/raydium-sdk-v2";
-import { Commitment, Finality, Keypair, PublicKey, SendTransactionError } from "@solana/web3.js";
+import { Commitment, Finality, Keypair, PublicKey, sendAndConfirmTransaction, SendTransactionError } from "@solana/web3.js";
 import { PriorityFee, TransactionResult } from "./types.js";
 import { DEFAULT_COMMITMENT, DEFAULT_FINALITY } from "./util.js";
 import { TOKEN_WSOL } from "@raydium-io/raydium-sdk-v2";
@@ -126,7 +126,7 @@ export class RaydiumSDK {
       })
 
 
-      const { execute } = await this.program.liquidity.swap({
+      const { transaction } = await this.program.liquidity.swap({
         poolInfo,
         poolKeys,
         amountIn: new BN(buyAmountSol.toString()),
@@ -141,8 +141,8 @@ export class RaydiumSDK {
         // },
       })
 
-      // Exécuter la transaction avec le SDK
-      const { txId } = await execute({ sendAndConfirm: true })
+      transaction.sign([buyer])
+      const txId = await this.program.connection.sendRawTransaction(transaction.serialize(), { skipPreflight: true })
       console.log(`swap successfully in amm pool:`, { txId: `https://explorer.solana.com/tx/${txId}` })
 
       return {
@@ -221,7 +221,7 @@ export class RaydiumSDK {
         slippage: Number(slippageBasisPoints) / 10000,
       })
 
-      const { execute } = await this.program.liquidity.swap({
+      const { transaction } = await this.program.liquidity.swap({
         poolInfo,
         poolKeys,
         amountIn: new BN(sellAmount.toString()),
@@ -237,9 +237,9 @@ export class RaydiumSDK {
       })
 
       // Exécuter la transaction avec le SDK
-      const { txId } = await execute({ sendAndConfirm: true })
-      console.log(`sold successfully in amm pool:`, { txId: `https://explorer.solana.com/tx/${txId}` })
-
+      transaction.sign([seller])
+      const txId = await this.program.connection.sendRawTransaction(transaction.serialize(), { skipPreflight: true })
+      console.log(`swap successfully in amm pool:`, { txId: `https://explorer.solana.com/tx/${txId}` })
       return {
         success: true,
         signature: txId
