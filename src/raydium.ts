@@ -241,16 +241,62 @@ export class RaydiumSDK {
       console.log("[BUY] Preparing to execute transaction");
       
       try {
-        const { txIds } = await execute({ sequentially: true });
-        console.log(`[BUY] Transaction executed successfully with ID(s): ${txIds.join(', ')}`);
-        txIds.forEach((txId) => console.log(`https://explorer.solana.com/tx/${txId}`));
-        
-        return {
-          success: true,
-          signature: txIds[0]
-        };
+        // Tenter d'utiliser execute() avec journalisation détaillée
+        try {
+          const { txIds } = await execute({ sequentially: true });
+          console.log(`[BUY] Transaction executed successfully with ID(s): ${txIds.join(', ')}`);
+          txIds.forEach((txId) => console.log(`https://explorer.solana.com/tx/${txId}`));
+          
+          return {
+            success: true,
+            signature: txIds[0]
+          };
+        } catch (executeError) {
+          console.error(`[BUY] Execute error:`, executeError);
+          
+          // Logs pour déboguer
+          console.error('[BUY] Transaction details:', {
+            hasTransactions: transactions && transactions.length > 0,
+            transactionCount: transactions?.length || 0
+          });
+          
+          // SOLUTION DE CONTOURNEMENT: Traiter manuellement la transaction si execute() échoue
+          console.log("[BUY] Falling back to manual transaction processing");
+          
+          if (!transactions || transactions.length === 0) {
+            throw new Error("No transactions available for manual processing");
+          }
+          
+          const tx = transactions[0];
+          console.log("[BUY] Signing transaction manually");
+          
+          // S'assurer que la transaction est de type VersionedTransaction
+          if (tx.constructor.name !== 'VersionedTransaction') {
+            console.log("[BUY] Transaction is not a VersionedTransaction, attempting to convert");
+            // Conversion non nécessaire ici car toutes les transactions du SDK sont versionnées
+          }
+          
+          // Signer manuellement
+          tx.sign([buyer]);
+          console.log("[BUY] Transaction signed successfully");
+          
+          // Envoyer manuellement
+          console.log("[BUY] Sending transaction manually");
+          const txId = await this.program.connection.sendTransaction(tx, {
+            skipPreflight: false,
+            preflightCommitment: commitment
+          });
+          
+          console.log(`[BUY] Transaction sent manually: ${txId}`);
+          console.log(`https://explorer.solana.com/tx/${txId}`);
+          
+          return {
+            success: true,
+            signature: txId
+          };
+        }
       } catch (executeError) {
-        console.error(`[BUY] Execute error:`, executeError);
+        console.error(`[BUY] Both execute() and manual fallback failed:`, executeError);
         
         // Obtenir plus de détails sur l'erreur d'exécution
         if (executeError instanceof Error) {
@@ -258,12 +304,6 @@ export class RaydiumSDK {
           console.error(`[BUY] Error message: ${executeError.message}`);
           console.error(`[BUY] Error stack: ${executeError.stack}`);
         }
-        
-        // Logs pour déboguer
-        console.error('[BUY] Transaction details:', {
-          hasTransactions: transactions && transactions.length > 0,
-          transactionCount: transactions?.length || 0
-        });
         
         throw executeError;
       }
@@ -440,16 +480,62 @@ export class RaydiumSDK {
       console.log("[SELL] Preparing to execute transaction");
       
       try {
-        const { txIds } = await execute({ sequentially: true });
-        console.log(`[SELL] Transaction executed successfully with ID(s): ${txIds.join(', ')}`);
-        txIds.forEach((txId) => console.log(`https://explorer.solana.com/tx/${txId}`));
-        
-        return {
-          success: true,
-          signature: txIds[0]
-        };
+        // Tenter d'utiliser execute() avec journalisation détaillée
+        try {
+          const { txIds } = await execute({ sequentially: true });
+          console.log(`[SELL] Transaction executed successfully with ID(s): ${txIds.join(', ')}`);
+          txIds.forEach((txId) => console.log(`https://explorer.solana.com/tx/${txId}`));
+          
+          return {
+            success: true,
+            signature: txIds[0]
+          };
+        } catch (executeError) {
+          console.error(`[SELL] Execute error:`, executeError);
+          
+          // Logs pour déboguer
+          console.error('[SELL] Transaction details:', {
+            hasTransactions: transactions && transactions.length > 0,
+            transactionCount: transactions?.length || 0
+          });
+          
+          // SOLUTION DE CONTOURNEMENT: Traiter manuellement la transaction si execute() échoue
+          console.log("[SELL] Falling back to manual transaction processing");
+          
+          if (!transactions || transactions.length === 0) {
+            throw new Error("No transactions available for manual processing");
+          }
+          
+          const tx = transactions[0];
+          console.log("[SELL] Signing transaction manually");
+          
+          // S'assurer que la transaction est de type VersionedTransaction
+          if (tx.constructor.name !== 'VersionedTransaction') {
+            console.log("[SELL] Transaction is not a VersionedTransaction, attempting to convert");
+            // Conversion non nécessaire ici car toutes les transactions du SDK sont versionnées
+          }
+          
+          // Signer manuellement
+          tx.sign([seller]);
+          console.log("[SELL] Transaction signed successfully");
+          
+          // Envoyer manuellement
+          console.log("[SELL] Sending transaction manually");
+          const txId = await this.program.connection.sendTransaction(tx, {
+            skipPreflight: false,
+            preflightCommitment: commitment
+          });
+          
+          console.log(`[SELL] Transaction sent manually: ${txId}`);
+          console.log(`https://explorer.solana.com/tx/${txId}`);
+          
+          return {
+            success: true,
+            signature: txId
+          };
+        }
       } catch (executeError) {
-        console.error(`[SELL] Execute error:`, executeError);
+        console.error(`[SELL] Both execute() and manual fallback failed:`, executeError);
         
         // Obtenir plus de détails sur l'erreur d'exécution
         if (executeError instanceof Error) {
@@ -457,12 +543,6 @@ export class RaydiumSDK {
           console.error(`[SELL] Error message: ${executeError.message}`);
           console.error(`[SELL] Error stack: ${executeError.stack}`);
         }
-        
-        // Logs pour déboguer
-        console.error('[SELL] Transaction details:', {
-          hasTransactions: transactions && transactions.length > 0,
-          transactionCount: transactions?.length || 0
-        });
         
         throw executeError;
       }
