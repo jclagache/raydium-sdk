@@ -1,7 +1,7 @@
 import { Provider } from "@coral-xyz/anchor";
 import BN from "bn.js";
 import { ApiV3PoolInfoStandardItem, PoolFetchType, Raydium, TxVersion } from "@raydium-io/raydium-sdk-v2";
-import { Commitment, Finality, Keypair, LAMPORTS_PER_SOL, PublicKey, SendTransactionError } from "@solana/web3.js";
+import { Commitment, Finality, Keypair, PublicKey, SendTransactionError } from "@solana/web3.js";
 import { PriorityFee, TransactionResult } from "./types.js";
 import { DEFAULT_COMMITMENT, DEFAULT_FINALITY } from "./util.js";
 import { TOKEN_WSOL } from "@raydium-io/raydium-sdk-v2";
@@ -119,7 +119,7 @@ export class RaydiumSDK {
           status,
           version: 4,
         },
-        amountIn: new BN(Number(buyAmountSol) * LAMPORTS_PER_SOL),
+        amountIn: new BN(buyAmountSol.toString()),
         mintIn: wsolMint,
         mintOut: mint,
         slippage: Number(slippageBasisPoints) / 10000, // range: 1 ~ 0.0001, means 100% ~ 0.01%
@@ -129,7 +129,7 @@ export class RaydiumSDK {
       const { execute } = await this.program.liquidity.swap({
         poolInfo,
         poolKeys,
-        amountIn: new BN(Number(buyAmountSol) * LAMPORTS_PER_SOL),
+        amountIn: new BN(buyAmountSol.toString()),
         amountOut: out.minAmountOut, // out.amountOut means amount 'without' slippage
         fixedSide: 'in',
         inputMint: wsolMint.toString(),
@@ -215,7 +215,7 @@ export class RaydiumSDK {
           status,
           version: 4,
         },
-        amountIn: new BN(Number(sellAmount)),
+        amountIn: new BN(sellAmount.toString()),
         mintIn: mint,
         mintOut: wsolMint,
         slippage: Number(slippageBasisPoints) / 10000,
@@ -224,7 +224,7 @@ export class RaydiumSDK {
       const { execute } = await this.program.liquidity.swap({
         poolInfo,
         poolKeys,
-        amountIn: new BN(Number(sellAmount)),
+        amountIn: new BN(sellAmount.toString()),
         amountOut: out.minAmountOut,
         fixedSide: 'in',
         inputMint: mint.toString(),
