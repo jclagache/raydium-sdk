@@ -117,7 +117,6 @@ export class RaydiumSDK {
     finality: Finality = DEFAULT_FINALITY
   ): Promise<TransactionResult> {
     try {
-
       await this.program.fetchChainTime();
 
       const wsolMint = new PublicKey(TOKEN_WSOL.address);
@@ -238,32 +237,52 @@ export class RaydiumSDK {
           microLamports: 465915,
         }
       });
-      const { txIds } = await execute({ sequentially: true })
-      txIds.forEach((txId) => console.log(`https://explorer.solana.com/tx/${txId}`))
-      return {
-        success: true,
-        signature: txIds[0]
-      };
+
+      console.log("[BUY] Preparing to execute transaction");
+      
+      try {
+        const { txIds } = await execute({ sequentially: true });
+        console.log(`[BUY] Transaction executed successfully with ID(s): ${txIds.join(', ')}`);
+        txIds.forEach((txId) => console.log(`https://explorer.solana.com/tx/${txId}`));
+        
+        return {
+          success: true,
+          signature: txIds[0]
+        };
+      } catch (executeError) {
+        console.error(`[BUY] Execute error:`, executeError);
+        
+        // Obtenir plus de détails sur l'erreur d'exécution
+        if (executeError instanceof Error) {
+          console.error(`[BUY] Error name: ${executeError.name}`);
+          console.error(`[BUY] Error message: ${executeError.message}`);
+          console.error(`[BUY] Error stack: ${executeError.stack}`);
+        }
+        
+        // Logs pour déboguer
+        console.error('[BUY] Transaction details:', {
+          hasTransactions: transactions && transactions.length > 0,
+          transactionCount: transactions?.length || 0
+        });
+        
+        throw executeError;
+      }
     } catch (error) {
       console.error(`[BUY] Error during buy:`, error);
+      
       if (error instanceof SendTransactionError) {
         try {
-          // Try to get logs but handle potential errors as these properties might be private
           const logs = await error.getLogs(this.program.connection).catch(() => null);
-          console.error(`[BUY] Transaction error details:`, error.message);
-          
           if (logs) {
             console.error(`[BUY] Transaction logs:`, logs);
           } else {
-            console.error(`[BUY] No transaction logs available. Simulation may have failed.`);
+            console.error(`[BUY] No transaction logs available.`);
           }
-          
-          // Print the full error as JSON for debugging
-          console.error(`[BUY] Full error:`, JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
         } catch (logError) {
           console.error(`[BUY] Failed to get transaction logs:`, logError);
         }
       }
+      
       throw error;
     }
   }
@@ -418,12 +437,35 @@ export class RaydiumSDK {
         }
       });
 
-      const { txIds } = await execute({ sequentially: true })
-      txIds.forEach((txId) => console.log(`https://explorer.solana.com/tx/${txId}`))
-      return {
-        success: true,
-        signature: txIds[0]
-      };
+      console.log("[SELL] Preparing to execute transaction");
+      
+      try {
+        const { txIds } = await execute({ sequentially: true });
+        console.log(`[SELL] Transaction executed successfully with ID(s): ${txIds.join(', ')}`);
+        txIds.forEach((txId) => console.log(`https://explorer.solana.com/tx/${txId}`));
+        
+        return {
+          success: true,
+          signature: txIds[0]
+        };
+      } catch (executeError) {
+        console.error(`[SELL] Execute error:`, executeError);
+        
+        // Obtenir plus de détails sur l'erreur d'exécution
+        if (executeError instanceof Error) {
+          console.error(`[SELL] Error name: ${executeError.name}`);
+          console.error(`[SELL] Error message: ${executeError.message}`);
+          console.error(`[SELL] Error stack: ${executeError.stack}`);
+        }
+        
+        // Logs pour déboguer
+        console.error('[SELL] Transaction details:', {
+          hasTransactions: transactions && transactions.length > 0,
+          transactionCount: transactions?.length || 0
+        });
+        
+        throw executeError;
+      }
     } catch (error) {
       console.error(`[SELL] Error during sell:`, error);
       if (error instanceof SendTransactionError) {
