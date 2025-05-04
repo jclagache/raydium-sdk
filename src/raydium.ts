@@ -19,6 +19,18 @@ export class RaydiumSDK {
     if (!provider.wallet) {
       throw new Error("Provider wallet is undefined");
     }
+    
+    // Vérifier que wallet.payer est une paire de clés valide avec une clé privée
+    const payer = provider.wallet.payer;
+    if (!payer) {
+      throw new Error("Provider wallet.payer is undefined");
+    }
+    
+    // Vérifier spécifiquement si nous avons une clé privée
+    if (!('secretKey' in payer)) {
+      throw new Error("Provider wallet.payer does not have a secretKey - cannot use for signing");
+    }
+
     this.cachePools = cachePools ?? null;
     Raydium.load({
       connection: provider.connection,
@@ -117,6 +129,11 @@ export class RaydiumSDK {
     finality: Finality = DEFAULT_FINALITY
   ): Promise<TransactionResult> {
     try {
+      // Vérifier que buyer est une keypair valide avec clé privée
+      if (!buyer.secretKey || buyer.secretKey.length === 0) {
+        throw new Error(`Cannot use buyer key ${buyer.publicKey.toString()} for signing - missing secret key`);
+      }
+      
       await this.program.fetchChainTime();
 
       const wsolMint = new PublicKey(TOKEN_WSOL.address);
@@ -270,6 +287,11 @@ export class RaydiumSDK {
           const tx = transactions[0];
           console.log("[BUY] Signing transaction manually");
           
+          // Vérifier que buyer est une paire de clés complète
+          if (!buyer.secretKey || buyer.secretKey.length === 0) {
+            throw new Error(`Cannot sign with non signer key ${buyer.publicKey.toString()}`);
+          }
+          
           // S'assurer que la transaction est de type VersionedTransaction
           if (tx.constructor.name !== 'VersionedTransaction') {
             console.log("[BUY] Transaction is not a VersionedTransaction, attempting to convert");
@@ -277,8 +299,23 @@ export class RaydiumSDK {
           }
           
           // Signer manuellement
-          tx.sign([buyer]);
-          console.log("[BUY] Transaction signed successfully");
+          try {
+            tx.sign([buyer]);
+            console.log("[BUY] Transaction signed successfully");
+          } catch (signError) {
+            console.error("[BUY] Error during transaction signing:", signError);
+            
+            // Tenter d'obtenir plus d'informations sur la clé qui cause des problèmes
+            console.log("[BUY] Keypair info:", {
+              hasPublicKey: !!buyer.publicKey,
+              publicKeyType: typeof buyer.publicKey,
+              publicKey: buyer.publicKey?.toString(),
+              hasSecretKey: !!buyer.secretKey,
+              secretKeyLength: buyer.secretKey?.length
+            });
+            
+            throw signError;
+          }
           
           // Envoyer manuellement
           console.log("[BUY] Sending transaction manually");
@@ -340,6 +377,11 @@ export class RaydiumSDK {
     finality: Finality = DEFAULT_FINALITY
   ): Promise<TransactionResult> {
     try {
+      // Vérifier que seller est une keypair valide avec clé privée
+      if (!seller.secretKey || seller.secretKey.length === 0) {
+        throw new Error(`Cannot use seller key ${seller.publicKey.toString()} for signing - missing secret key`);
+      }
+      
       await this.program.fetchChainTime();
 
       const wsolMint = new PublicKey(TOKEN_WSOL.address);
@@ -509,6 +551,11 @@ export class RaydiumSDK {
           const tx = transactions[0];
           console.log("[SELL] Signing transaction manually");
           
+          // Vérifier que seller est une paire de clés complète
+          if (!seller.secretKey || seller.secretKey.length === 0) {
+            throw new Error(`Cannot sign with non signer key ${seller.publicKey.toString()}`);
+          }
+          
           // S'assurer que la transaction est de type VersionedTransaction
           if (tx.constructor.name !== 'VersionedTransaction') {
             console.log("[SELL] Transaction is not a VersionedTransaction, attempting to convert");
@@ -516,8 +563,23 @@ export class RaydiumSDK {
           }
           
           // Signer manuellement
-          tx.sign([seller]);
-          console.log("[SELL] Transaction signed successfully");
+          try {
+            tx.sign([seller]);
+            console.log("[SELL] Transaction signed successfully");
+          } catch (signError) {
+            console.error("[SELL] Error during transaction signing:", signError);
+            
+            // Tenter d'obtenir plus d'informations sur la clé qui cause des problèmes
+            console.log("[SELL] Keypair info:", {
+              hasPublicKey: !!seller.publicKey,
+              publicKeyType: typeof seller.publicKey,
+              publicKey: seller.publicKey?.toString(),
+              hasSecretKey: !!seller.secretKey,
+              secretKeyLength: seller.secretKey?.length
+            });
+            
+            throw signError;
+          }
           
           // Envoyer manuellement
           console.log("[SELL] Sending transaction manually");
