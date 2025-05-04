@@ -128,7 +128,7 @@ export class RaydiumSDK {
       })
 
 
-      const { transaction } = await this.program.liquidity.swap({
+      const { execute } = await this.program.liquidity.swap({
         poolInfo,
         poolKeys,
         amountIn: new BN(buyAmountSol.toString()),
@@ -143,8 +143,7 @@ export class RaydiumSDK {
         // },
       })
 
-      transaction.sign([buyer])
-      const txId = await this.program.connection.sendRawTransaction(transaction.serialize(), { skipPreflight: true })
+      const { txId } = await execute({ sendAndConfirm: true })
       console.log(`swap successfully in amm pool:`, { txId: `https://explorer.solana.com/tx/${txId}` })
 
       return {
@@ -223,7 +222,7 @@ export class RaydiumSDK {
         slippage: Number(slippageBasisPoints) / 10000,
       })
 
-      const { transaction } = await this.program.liquidity.swap({
+      const { execute } = await this.program.liquidity.swap({
         poolInfo,
         poolKeys,
         amountIn: new BN(sellAmount.toString()),
@@ -239,8 +238,7 @@ export class RaydiumSDK {
       })
 
       // Exécuter la transaction avec le SDK
-      transaction.sign([seller])
-      const txId = await this.program.connection.sendRawTransaction(transaction.serialize(), { skipPreflight: true })
+      const { txId } = await execute({ sendAndConfirm: true })
       console.log(`swap successfully in amm pool:`, { txId: `https://explorer.solana.com/tx/${txId}` })
       return {
         success: true,
